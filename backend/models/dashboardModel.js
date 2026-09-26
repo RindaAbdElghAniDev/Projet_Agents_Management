@@ -2,8 +2,6 @@ const pool = require('../config/db');
 
 // ----- Cartes du Dashboard Admin -----
 
-// Total, actifs, inactifs en une seule requête grâce à SUM(condition)
-// SUM(status = 'ACTIVE') : MySQL compte 1 pour chaque ligne où la condition est vraie
 const getAgentCounts = async () => {
   const [rows] = await pool.execute(
     `SELECT COUNT(*) AS total,
@@ -19,7 +17,6 @@ const getDepartmentCount = async () => {
   return rows[0].total;
 };
 
-// Nombre de présences du jour, regroupées par statut
 const getTodayAttendanceCounts = async () => {
   const [rows] = await pool.execute(
     `SELECT status, COUNT(*) AS count
@@ -37,9 +34,8 @@ const getPendingLeavesCount = async () => {
   return rows[0].total;
 };
 
-// ----- Graphiques Admin -----
+// ----- Graphiques et KPI Admin -----
 
-// Graphique 1 : nombre d'agents par département (LEFT JOIN : garde les départements vides)
 const getAgentsByDepartment = async () => {
   const [rows] = await pool.execute(
     `SELECT d.name AS department_name, COUNT(a.id) AS agents_count
@@ -51,18 +47,31 @@ const getAgentsByDepartment = async () => {
   return rows;
 };
 
-// Graphique 2 : répartition des présences sur les 30 derniers jours
-const getAttendanceBreakdown = async () => {
+// Répartition des présences sur les `days` derniers jours (aujourd'hui inclus)
+const getAttendanceBreakdown = async (days) => {
   const [rows] = await pool.execute(
     `SELECT status, COUNT(*) AS count
      FROM attendance
-     WHERE attendance_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-     GROUP BY status`
+     WHERE attendance_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+     GROUP BY status`,
+    [days - 1]
   );
   return rows;
 };
 
-// Graphique 3 : nombre de demandes de congé créées, mois par mois (6 derniers mois)
+// Même répartition, pour la période équivalente juste avant (comparaison de tendance)
+const getPreviousAttendanceBreakdown = async (days) => {
+  const [rows] = await pool.execute(
+    `SELECT status, COUNT(*) AS count
+     FROM attendance
+     WHERE attendance_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+       AND attendance_date < DATE_SUB(CURDATE(), INTERVAL ? DAY)
+     GROUP BY status`,
+    [days * 2 - 1, days - 1]
+  );
+  return rows;
+};
+
 const getLeavesEvolution = async () => {
   const [rows] = await pool.execute(
     `SELECT DATE_FORMAT(created_at, '%Y-%m') AS month, COUNT(*) AS count
@@ -74,14 +83,35 @@ const getLeavesEvolution = async () => {
   return rows;
 };
 
-// ----- Dashboard Agent (statistiques personnelles) -----
+// Décisions prises sur les congés (hors "en attente"), pour calculer un taux d'approbation
+const getLeaveDecisionCounts = async () => {
+  const [rows] = await pool.execute(
+    "SELECT status, COUNT(*) AS count FROM leaves WHERE status IN ('APPROVED', 'REJECTED') GROUP BY status"
+  );
+  return rows;
+};
 
-// Présences du mois en cours, regroupées par statut
+// ----- Dashboard Agent -----
+
 const getOwnAttendanceStats = async (agentId) => {
   const [rows] = await pool.execute(
     `SELECT status, COUNT(*) AS count
      FROM attendance
      WHERE agent_id = ? AND attendance_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+     GROUP BY status`,
+    [agentId]
+  );
+  return rows;
+};
+
+// Même chose pour le mois précédent (comparaison de tendance)
+const getOwnAttendanceStatsPreviousMonth = async (agentId) => {
+  const [rows] = await pool.execute(
+    `SELECT status, COUNT(*) AS count
+     FROM attendance
+     WHERE agent_id = ?
+       AND attendance_date >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01')
+       AND attendance_date < DATE_FORMAT(CURDATE(), '%Y-%m-01')
      GROUP BY status`,
     [agentId]
   );
@@ -113,8 +143,11 @@ module.exports = {
   getPendingLeavesCount,
   getAgentsByDepartment,
   getAttendanceBreakdown,
+  getPreviousAttendanceBreakdown,
   getLeavesEvolution,
+  getLeaveDecisionCounts,
   getOwnAttendanceStats,
+  getOwnAttendanceStatsPreviousMonth,
   getOwnLeavesStats,
   getOwnRecentAttendance,
 };

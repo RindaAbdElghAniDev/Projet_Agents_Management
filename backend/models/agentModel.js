@@ -7,8 +7,26 @@ const SELECT_AGENTS = `
   JOIN departments d ON a.department_id = d.id
 `;
 
+// Colonnes autorisées pour le tri : la clé vient du client, la valeur est le SQL réel.
+// Cette liste blanche évite d'injecter un nom de colonne arbitraire dans la requête.
+const SORT_COLUMNS = {
+  name: 'a.last_name',
+  email: 'a.email',
+  department: 'd.name',
+  position: 'a.position',
+  salary: 'a.salary',
+  hire_date: 'a.hire_date',
+  status: 'a.status',
+};
+const SORT_FIELDS = Object.keys(SORT_COLUMNS);
+
+const buildOrderBy = (sortBy, sortOrder) => {
+  const column = SORT_COLUMNS[sortBy] || SORT_COLUMNS.name;
+  const order = sortOrder === 'desc' ? 'DESC' : 'ASC';
+  return `ORDER BY ${column} ${order}`;
+};
+
 // Construit le WHERE selon les filtres reçus.
-// Le SQL ne contient que du texte fixe : les valeurs de l'utilisateur vont TOUJOURS dans params (?)
 const buildWhere = ({ search, departmentId, status, position }) => {
   const conditions = [];
   const params = [];
@@ -36,12 +54,12 @@ const buildWhere = ({ search, departmentId, status, position }) => {
 };
 
 // Liste paginée + total
-const findAll = async (filters, limit, offset) => {
+const findAll = async (filters, limit, offset, sort = {}) => {
   const { where, params } = buildWhere(filters);
+  const orderBy = buildOrderBy(sort.sortBy, sort.sortOrder);
 
-  // query() plutôt qu'execute() pour LIMIT/OFFSET (voir explication dans le cours)
   const [agents] = await pool.query(
-    `${SELECT_AGENTS} ${where} ORDER BY a.last_name ASC, a.first_name ASC LIMIT ? OFFSET ?`,
+    `${SELECT_AGENTS} ${where} ${orderBy} LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
 
@@ -61,9 +79,15 @@ const findById = async (id) => {
 
 // Un agent par email (pour vérifier les doublons)
 const findByEmail = async (email) => {
+  const [rows] = await pool.execute('SELECT id FROM agents WHERE email = ?', [email]);
+  return rows[0];
+};
+
+// Fiche agent liée à un compte utilisateur (undefined si aucune)
+const findByUserId = async (userId) => {
   const [rows] = await pool.execute(
-    'SELECT id FROM agents WHERE email = ?',
-    [email]
+    'SELECT id, first_name, last_name, status FROM agents WHERE user_id = ?',
+    [userId]
   );
   return rows[0];
 };
@@ -131,21 +155,22 @@ const linkUserByEmail = async (userId, email) => {
     [userId, email]
   );
 };
-// Fiche agent liée à un compte utilisateur (undefined si aucune)
-const findByUserId = async (userId) => {
-  const [rows] = await pool.execute(
-    'SELECT id, first_name, last_name, status FROM agents WHERE user_id = ?',
-    [userId]
-  );
-  return rows[0];
+// Liste complète (sans pagination), pour l'export CSV. Plafonnée à 5000 lignes par sécurité.
+const findAllForExport = async (filters) => {
+  const { where, params } = buildWhere(filters);
+  const orderBy = buildOrderBy('name', 'asc');
+  const [agents] = await pool.query(`${SELECT_AGENTS} ${where} ${orderBy} LIMIT 5000`, params);
+  return agents;
 };
 module.exports = {
   findAll,
   findById,
+  findAllForExport,
   findByEmail,
   findByUserId,
   create,
   update,
   remove,
   linkUserByEmail,
+  SORT_FIELDS,
 };

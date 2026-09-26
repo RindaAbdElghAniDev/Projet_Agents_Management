@@ -1,61 +1,59 @@
-import { useEffect, useState } from 'react';
-import api, { getStoredUser } from '../services/api';
-
-const STATUS_LABELS = {
-  PRESENT: 'Présent',
-  ABSENT: 'Absent',
-  LATE: 'En retard',
-  LEAVE: 'En congé',
-};
-
+import { useEffect, useRef, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import toast from 'react-hot-toast';
+import { HiOutlinePlus, HiOutlineClipboardCheck, HiOutlinePencil } from 'react-icons/hi';
+import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { attendanceCreateSchema, attendanceUpdateSchema } from '../lib/validators';
+import { ATTENDANCE_STATUS_LABELS, ATTENDANCE_STATUS_COLORS } from '../lib/constants';
+import { getToday, formatTime } from '../lib/date';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import Input from '../components/ui/Input';
+import Select from '../components/ui/Select';
+import Modal from '../components/ui/Modal';
+import Badge from '../components/ui/Badge';
+import Skeleton from '../components/ui/Skeleton';
+import EmptyState from '../components/ui/EmptyState';
+import Pagination from '../components/ui/Pagination';
+import { HiOutlineDownload } from 'react-icons/hi';
+import { downloadFile } from '../lib/download';
 const EMPTY_FILTERS = { agent_id: '', status: '', date_from: '', date_to: '' };
 
-// Date du jour au format AAAA-MM-JJ (heure locale)
-const getToday = () => {
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
-
-// "08:30:00" -> "08:30"
-const formatTime = (time) => (time ? time.slice(0, 5) : '-');
-
-const emptyForm = () => ({
-  agent_id: '',
-  attendance_date: getToday(),
-  status: 'PRESENT',
-  check_in: '',
-  check_out: '',
-});
-
 const Attendance = () => {
-  const user = getStoredUser();
-  const isAdmin = user?.role === 'ADMIN';
+  const { isAdmin } = useAuth();
 
-  // ----- Données -----
   const [records, setRecords] = useState([]);
   const [agents, setAgents] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState({ type: '', text: '' });
-
-  // ----- Filtres et pagination -----
+  const [exporting, setExporting] = useState(false);
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
 
-  // ----- Modale (Admin) -----
-  const [showModal, setShowModal] = useState(false);
-  const [editingRecord, setEditingRecord] = useState(null); // null = ajout
-  const [form, setForm] = useState(emptyForm());
-  const [formErrors, setFormErrors] = useState({});
-  const [formServerError, setFormServerError] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState(null);
   const [saving, setSaving] = useState(false);
+  const modeRef = useRef('create'); // lu par le resolver au moment de la validation
 
-  // Pas d'heures pour une absence ou un congé
-  const timesDisabled = form.status === 'ABSENT' || form.status === 'LEAVE';
+  const {
+    register,
+    handleSubmit,
+    reset,
+    watch,
+    formState: { errors },
+  } = useForm({
+    resolver: (values, context, options) => {
+      const schema = modeRef.current === 'edit' ? attendanceUpdateSchema : attendanceCreateSchema;
+      return zodResolver(schema)(values, context, options);
+    },
+  });
 
-  // ----- Chargement -----
+  const status = watch('status');
+  const timesDisabled = status === 'ABSENT' || status === 'LEAVE';
+
   const fetchAttendance = async () => {
     try {
       setLoading(true);
@@ -63,19 +61,17 @@ const Attendance = () => {
       Object.entries(appliedFilters).forEach(([key, value]) => {
         if (value) params[key] = value;
       });
-
       const res = await api.get('/attendance', { params });
       setRecords(res.data.attendance);
       setPagination(res.data.pagination);
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      toast.error(err.message);
       setRecords([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // Liste des agents pour le filtre et le formulaire (Admin seulement)
   useEffect(() => {
     if (!isAdmin) return;
     const fetchAgents = async () => {
@@ -83,7 +79,7 @@ const Attendance = () => {
         const res = await api.get('/agents', { params: { limit: 50 } });
         setAgents(res.data.agents);
       } catch (err) {
-        setMessage({ type: 'error', text: err.message });
+        toast.error(err.message);
       }
     };
     fetchAgents();
@@ -94,10 +90,7 @@ const Attendance = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, appliedFilters]);
 
-  // ----- Filtres -----
-  const handleFilterChange = (e) => {
-    setFilters({ ...filters, [e.target.name]: e.target.value });
-  };
+  const handleFilterChange = (e) => setFilters({ ...filters, [e.target.name]: e.target.value });
 
   const handleSearch = (e) => {
     e.preventDefault();
@@ -110,86 +103,62 @@ const Attendance = () => {
     setAppliedFilters(EMPTY_FILTERS);
     setPage(1);
   };
-
-  // ----- Modale -----
+const handleExport = async () => {
+  try {
+    setExporting(true);
+    const params = {};
+    Object.entries(appliedFilters).forEach(([key, value]) => {
+      if (value) params[key] = value;
+    });
+    await downloadFile('/attendance/export', params, `presences_${getToday()}.csv`);
+  } catch (err) {
+    toast.error(err.message);
+  } finally {
+    setExporting(false);
+  }
+};
   const openAdd = () => {
     setEditingRecord(null);
-    setForm(emptyForm());
-    setFormErrors({});
-    setFormServerError('');
-    setShowModal(true);
+    modeRef.current = 'create';
+    reset({ agent_id: '', attendance_date: getToday(), status: 'PRESENT', check_in: '', check_out: '' });
+    setModalOpen(true);
   };
 
   const openEdit = (record) => {
     setEditingRecord(record);
-    setForm({
-      agent_id: String(record.agent_id),
-      attendance_date: record.attendance_date,
+    modeRef.current = 'edit';
+    reset({
       status: record.status,
       check_in: record.check_in ? record.check_in.slice(0, 5) : '',
       check_out: record.check_out ? record.check_out.slice(0, 5) : '',
     });
-    setFormErrors({});
-    setFormServerError('');
-    setShowModal(true);
+    setModalOpen(true);
   };
 
-  const handleFormChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-  };
-
-  const validateForm = () => {
-    const errs = {};
-    if (!editingRecord) {
-      if (!form.agent_id) errs.agent_id = "L'agent est obligatoire";
-      if (!form.attendance_date) {
-        errs.attendance_date = 'La date est obligatoire';
-      } else if (form.attendance_date > getToday()) {
-        errs.attendance_date = 'La date ne peut pas être dans le futur';
-      }
-    }
-    if (!timesDisabled) {
-      if (!form.check_in) errs.check_in = "L'heure d'arrivée est obligatoire";
-      if (form.check_in && form.check_out && form.check_out <= form.check_in) {
-        errs.check_out = "Le départ doit être après l'arrivée";
-      }
-    }
-    return errs;
-  };
-
-  const handleSave = async (e) => {
-    e.preventDefault();
-    setFormServerError('');
-
-    const errs = validateForm();
-    setFormErrors(errs);
-    if (Object.keys(errs).length > 0) return;
-
+  const onSubmit = async (data) => {
     const details = {
-      status: form.status,
-      check_in: timesDisabled ? '' : form.check_in,
-      check_out: timesDisabled ? '' : form.check_out,
+      status: data.status,
+      check_in: timesDisabled ? '' : data.check_in,
+      check_out: timesDisabled ? '' : data.check_out,
     };
 
     try {
       setSaving(true);
       if (editingRecord) {
         await api.put(`/attendance/${editingRecord.id}`, details);
+        toast.success('Présence modifiée avec succès');
       } else {
         await api.post('/attendance', {
-          agent_id: form.agent_id,
-          attendance_date: form.attendance_date,
+          agent_id: data.agent_id,
+          attendance_date: data.attendance_date,
           ...details,
         });
+        toast.success('Présence enregistrée avec succès');
       }
-      setShowModal(false);
-      setMessage({
-        type: 'success',
-        text: editingRecord ? 'Présence modifiée avec succès' : 'Présence enregistrée avec succès',
-      });
+      setModalOpen(false);
       fetchAttendance();
     } catch (err) {
-      setFormServerError(err.message);
+      toast.error(err.message);
     } finally {
       setSaving(false);
     }
@@ -197,233 +166,193 @@ const Attendance = () => {
 
   const activeAgents = agents.filter((a) => a.status === 'ACTIVE');
   const columnCount = isAdmin ? 7 : 4;
+  const hasActiveFilters = Object.values(appliedFilters).some(Boolean);
 
   return (
-    <div className="panel">
-      <div className="page-header">
-        <h1>{isAdmin ? 'Présences' : 'Mes présences'}</h1>
-        {isAdmin && (
-          <button className="btn btn-primary btn-auto" onClick={openAdd}>
-            + Enregistrer une présence
-          </button>
-        )}
-      </div>
-
-      {message.text && (
-        <div className={`alert alert-${message.type === 'success' ? 'success' : 'error'}`}>
-          {message.text}
+    <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+            {isAdmin ? 'Présences' : 'Mes présences'}
+          </h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{pagination.total} enregistrement(s)</p>
         </div>
-      )}
-
-      {/* ----- Filtres ----- */}
-      <form className="filters" onSubmit={handleSearch}>
         {isAdmin && (
-          <select name="agent_id" value={filters.agent_id} onChange={handleFilterChange}>
-            <option value="">Tous les agents</option>
-            {agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.last_name} {a.first_name}
-              </option>
-            ))}
-          </select>
-        )}
-        <select name="status" value={filters.status} onChange={handleFilterChange}>
-          <option value="">Tous les statuts</option>
-          {Object.entries(STATUS_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
-        </select>
-        <label className="filter-field">
-          Du
-          <input type="date" name="date_from" value={filters.date_from} onChange={handleFilterChange} />
-        </label>
-        <label className="filter-field">
-          Au
-          <input type="date" name="date_to" value={filters.date_to} onChange={handleFilterChange} />
-        </label>
-        <button type="submit" className="btn btn-primary btn-auto">Filtrer</button>
-        <button type="button" className="btn btn-secondary btn-auto" onClick={handleReset}>
-          Réinitialiser
-        </button>
-      </form>
-
-      {/* ----- Tableau ----- */}
-      <div className="table-wrapper">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Date</th>
-              {isAdmin && <th>Agent</th>}
-              {isAdmin && <th>Département</th>}
-              <th>Arrivée</th>
-              <th>Départ</th>
-              <th>Statut</th>
-              {isAdmin && <th>Actions</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={columnCount} className="table-empty">Chargement...</td></tr>
-            ) : records.length === 0 ? (
-              <tr><td colSpan={columnCount} className="table-empty">Aucune présence trouvée</td></tr>
-            ) : (
-              records.map((record) => (
-                <tr key={record.id}>
-                  <td>{record.attendance_date}</td>
-                  {isAdmin && <td>{record.last_name} {record.first_name}</td>}
-                  {isAdmin && <td>{record.department_name}</td>}
-                  <td>{formatTime(record.check_in)}</td>
-                  <td>{formatTime(record.check_out)}</td>
-                  <td>
-                    <span className={`badge badge-${record.status.toLowerCase()}`}>
-                      {STATUS_LABELS[record.status]}
-                    </span>
-                  </td>
-                  {isAdmin && (
-                    <td className="actions">
-                      <button
-                        className="btn btn-primary btn-sm btn-auto"
-                        onClick={() => openEdit(record)}
-                      >
-                        Modifier
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* ----- Pagination ----- */}
-      <div className="pagination">
-        <button
-          className="btn btn-secondary btn-sm btn-auto"
-          disabled={page <= 1}
-          onClick={() => setPage(page - 1)}
-        >
-          Précédent
-        </button>
-        <span>
-          Page {pagination.page} sur {Math.max(pagination.totalPages, 1)} ({pagination.total} présences)
-        </span>
-        <button
-          className="btn btn-secondary btn-sm btn-auto"
-          disabled={page >= pagination.totalPages}
-          onClick={() => setPage(page + 1)}
-        >
-          Suivant
-        </button>
-      </div>
-
-      {/* ----- Modale (Admin) ----- */}
-      {showModal && (
-        <div className="modal-overlay">
-          <div className="modal">
-            <h2>{editingRecord ? 'Modifier la présence' : 'Enregistrer une présence'}</h2>
-
-            {formServerError && <div className="alert alert-error">{formServerError}</div>}
-
-            {/* En modification, l'agent et la date ne changent pas */}
-            {editingRecord && (
-              <div className="readonly-info">
-                <strong>{editingRecord.last_name} {editingRecord.first_name}</strong>
-                {' '}: {editingRecord.attendance_date}
-              </div>
-            )}
-
-            <form onSubmit={handleSave} noValidate>
-              <div className="form-grid">
-                {!editingRecord && (
-                  <>
-                    <div className="form-group">
-                      <label htmlFor="agent_id">Agent</label>
-                      <select
-                        id="agent_id"
-                        name="agent_id"
-                        value={form.agent_id}
-                        onChange={handleFormChange}
-                      >
-                        <option value="">Choisir...</option>
-                        {activeAgents.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.last_name} {a.first_name}
-                          </option>
-                        ))}
-                      </select>
-                      {formErrors.agent_id && <span className="field-error">{formErrors.agent_id}</span>}
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="attendance_date">Date</label>
-                      <input
-                        id="attendance_date"
-                        type="date"
-                        name="attendance_date"
-                        max={getToday()}
-                        value={form.attendance_date}
-                        onChange={handleFormChange}
-                      />
-                      {formErrors.attendance_date && (
-                        <span className="field-error">{formErrors.attendance_date}</span>
-                      )}
-                    </div>
-                  </>
-                )}
-
-                <div className="form-group">
-                  <label htmlFor="status">Statut</label>
-                  <select id="status" name="status" value={form.status} onChange={handleFormChange}>
-                    {Object.entries(STATUS_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="check_in">Heure d'arrivée</label>
-                  <input
-                    id="check_in"
-                    type="time"
-                    name="check_in"
-                    value={form.check_in}
-                    onChange={handleFormChange}
-                    disabled={timesDisabled}
-                  />
-                  {formErrors.check_in && <span className="field-error">{formErrors.check_in}</span>}
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="check_out">Heure de départ</label>
-                  <input
-                    id="check_out"
-                    type="time"
-                    name="check_out"
-                    value={form.check_out}
-                    onChange={handleFormChange}
-                    disabled={timesDisabled}
-                  />
-                  {formErrors.check_out && <span className="field-error">{formErrors.check_out}</span>}
-                </div>
-              </div>
-
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-auto"
-                  onClick={() => setShowModal(false)}
-                >
-                  Annuler
-                </button>
-                <button type="submit" className="btn btn-primary btn-auto" disabled={saving}>
-                  {saving ? 'Enregistrement...' : 'Enregistrer'}
-                </button>
-              </div>
-            </form>
+          <div className="flex gap-2">
+            <Button variant="secondary" icon={HiOutlineDownload} loading={exporting} onClick={handleExport}>
+              Exporter
+            </Button>
+            <Button icon={HiOutlinePlus} onClick={openAdd}>Enregistrer une présence</Button>
           </div>
+        )}
+      </div>
+
+      <Card>
+        <form
+          onSubmit={handleSearch}
+          className={`mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 ${isAdmin ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}
+        >
+          {isAdmin && (
+            <Select name="agent_id" value={filters.agent_id} onChange={handleFilterChange}>
+              <option value="">Tous les agents</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>{a.last_name} {a.first_name}</option>
+              ))}
+            </Select>
+          )}
+          <Select name="status" value={filters.status} onChange={handleFilterChange}>
+            <option value="">Tous les statuts</option>
+            {Object.entries(ATTENDANCE_STATUS_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </Select>
+          <Input type="date" name="date_from" value={filters.date_from} onChange={handleFilterChange} />
+          <Input type="date" name="date_to" value={filters.date_to} onChange={handleFilterChange} />
+          <div className="flex gap-2">
+            <Button type="submit" variant="secondary" className="flex-1">Filtrer</Button>
+            {hasActiveFilters && (
+              <Button type="button" variant="ghost" onClick={handleReset}>Réinitialiser</Button>
+            )}
+          </div>
+        </form>
+
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="border-b border-gray-100 dark:border-gray-700">
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Date</th>
+                {isAdmin && <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Agent</th>}
+                {isAdmin && <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Département</th>}
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Arrivée</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Départ</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Statut</th>
+                {isAdmin && <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Actions</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              {loading ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <tr key={i}>
+                    {Array.from({ length: columnCount }).map((__, j) => (
+                      <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-full" /></td>
+                    ))}
+                  </tr>
+                ))
+              ) : records.length === 0 ? (
+                <tr>
+                  <td colSpan={columnCount}>
+                    <EmptyState
+                      icon={HiOutlineClipboardCheck}
+                      title="Aucune présence trouvée"
+                      description={hasActiveFilters ? 'Essaie de modifier tes filtres.' : 'Aucun enregistrement pour le moment.'}
+                    />
+                  </td>
+                </tr>
+              ) : (
+                records.map((record) => (
+                  <tr key={record.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                    <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100">{record.attendance_date}</td>
+                    {isAdmin && <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{record.last_name} {record.first_name}</td>}
+                    {isAdmin && <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{record.department_name}</td>}
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{formatTime(record.check_in)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{formatTime(record.check_out)}</td>
+                    <td className="px-4 py-3">
+                      <Badge color={ATTENDANCE_STATUS_COLORS[record.status]}>{ATTENDANCE_STATUS_LABELS[record.status]}</Badge>
+                    </td>
+                    {isAdmin && (
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end">
+                          <button
+                            onClick={() => openEdit(record)}
+                            className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700"
+                            title="Modifier"
+                          >
+                            <HiOutlinePencil className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
-      )}
+
+        {!loading && records.length > 0 && (
+          <div className="mt-4">
+            <Pagination
+              page={pagination.page}
+              totalPages={pagination.totalPages}
+              total={pagination.total}
+              label="présences"
+              onChange={setPage}
+            />
+          </div>
+        )}
+      </Card>
+
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editingRecord ? 'Modifier la présence' : 'Enregistrer une présence'}
+      >
+        {editingRecord && (
+          <div className="mb-4 rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-600 dark:bg-gray-700/40 dark:text-gray-300">
+            <strong className="text-gray-900 dark:text-gray-100">
+              {editingRecord.last_name} {editingRecord.first_name}
+            </strong>{' '}
+            · {editingRecord.attendance_date}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-1 gap-4 sm:grid-cols-2" noValidate>
+          {!editingRecord && (
+            <>
+              <Select label="Agent" error={errors.agent_id?.message} {...register('agent_id')}>
+                <option value="">Choisir...</option>
+                {activeAgents.map((a) => (
+                  <option key={a.id} value={a.id}>{a.last_name} {a.first_name}</option>
+                ))}
+              </Select>
+              <Input
+                label="Date"
+                type="date"
+                max={getToday()}
+                error={errors.attendance_date?.message}
+                {...register('attendance_date')}
+              />
+            </>
+          )}
+
+          <Select label="Statut" error={errors.status?.message} {...register('status')}>
+            {Object.entries(ATTENDANCE_STATUS_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </Select>
+          <div />
+
+          <Input
+            label="Heure d'arrivée"
+            type="time"
+            disabled={timesDisabled}
+            error={errors.check_in?.message}
+            {...register('check_in')}
+          />
+          <Input
+            label="Heure de départ"
+            type="time"
+            disabled={timesDisabled}
+            error={errors.check_out?.message}
+            {...register('check_out')}
+          />
+
+          <div className="col-span-full mt-2 flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Annuler</Button>
+            <Button type="submit" loading={saving}>Enregistrer</Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 };

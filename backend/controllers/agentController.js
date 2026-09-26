@@ -2,6 +2,7 @@ const Agent = require('../models/agentModel');
 const Department = require('../models/departmentModel');
 const User = require('../models/userModel');
 const Log = require('../models/logModel');
+const { toCSV } = require('../utils/csv');
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^[0-9+\s().-]{6,30}$/;
 const STATUSES = ['ACTIVE', 'INACTIVE'];
@@ -12,11 +13,9 @@ const createError = (message, statusCode) => {
   return error;
 };
 
-// Vérifie le format AAAA-MM-JJ et que la date existe vraiment
 const isValidDate = (value) =>
   /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
 
-// Convertit et valide :id
 const parseId = (value) => {
   const id = Number(value);
   if (!Number.isInteger(id) || id <= 0) {
@@ -25,7 +24,6 @@ const parseId = (value) => {
   return id;
 };
 
-// Nettoie et valide les données d'un agent (création et modification)
 const cleanAgentData = (body = {}) => {
   const data = {
     first_name: String(body.first_name || '').trim(),
@@ -83,19 +81,24 @@ const cleanAgentData = (body = {}) => {
   return data;
 };
 
-// GET /api/agents?search=&department_id=&status=&position=&page=&limit=
+// GET /api/agents?search=&department_id=&status=&position=&page=&limit=&sort_by=&sort_order=
 const getAgents = async (req, res, next) => {
   try {
-    // Pagination : valeurs par défaut et bornes
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
     const offset = (page - 1) * limit;
 
-    // Filtres
     const status = req.query.status ? String(req.query.status).toUpperCase() : '';
     if (status && !STATUSES.includes(status)) {
       throw createError('Statut invalide (ACTIVE ou INACTIVE)', 400);
     }
+
+    // Tri : la colonne doit appartenir à la liste blanche exportée par le model
+    const sortBy = req.query.sort_by ? String(req.query.sort_by) : 'name';
+    if (!Agent.SORT_FIELDS.includes(sortBy)) {
+      throw createError('Colonne de tri invalide', 400);
+    }
+    const sortOrder = req.query.sort_order === 'desc' ? 'desc' : 'asc';
 
     const filters = {
       search: String(req.query.search || '').trim(),
@@ -104,17 +107,12 @@ const getAgents = async (req, res, next) => {
       position: String(req.query.position || '').trim(),
     };
 
-    const { agents, total } = await Agent.findAll(filters, limit, offset);
+    const { agents, total } = await Agent.findAll(filters, limit, offset, { sortBy, sortOrder });
 
     res.json({
       success: true,
       agents,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
     next(error);
@@ -147,22 +145,19 @@ const createAgent = async (req, res, next) => {
       throw createError('Département introuvable', 400);
     }
 
-    // Si un compte de connexion existe avec le même email, on le relie à la fiche
     const user = await User.findByEmail(data.email);
     data.user_id = user ? user.id : null;
 
     const agentId = await Agent.create(data);
     const agent = await Agent.findById(agentId);
+
     await Log.create(
       req.user.id,
       'CREATE_AGENT',
       `${req.user.name} a créé l'agent ${data.first_name} ${data.last_name}`
     );
-    res.status(201).json({
-      success: true,
-      message: 'Agent créé avec succès',
-      agent,
-    });
+
+    res.status(201).json({ success: true, message: 'Agent créé avec succès', agent });
   } catch (error) {
     next(error);
   }
@@ -179,7 +174,6 @@ const updateAgent = async (req, res, next) => {
 
     const data = cleanAgentData(req.body);
 
-    // L'email ne doit pas appartenir à un AUTRE agent
     const sameEmail = await Agent.findByEmail(data.email);
     if (sameEmail && sameEmail.id !== id) {
       throw createError('Un agent avec cet email existe déjà', 409);
@@ -190,22 +184,19 @@ const updateAgent = async (req, res, next) => {
 
     await Agent.update(id, data);
     const agent = await Agent.findById(id);
+
     await Log.create(
       req.user.id,
       'UPDATE_AGENT',
       `${req.user.name} a modifié l'agent ${data.first_name} ${data.last_name}`
     );
-    res.json({
-      success: true,
-      message: 'Agent modifié avec succès',
-      agent,
-    });
+
+    res.json({ success: true, message: 'Agent modifié avec succès', agent });
   } catch (error) {
     next(error);
   }
 };
 
-// DELETE /api/agents/:id
 // DELETE /api/agents/:id
 const deleteAgent = async (req, res, next) => {
   try {
@@ -229,10 +220,47 @@ const deleteAgent = async (req, res, next) => {
     next(error);
   }
 };
+// GET /api/agents/export?search=&department_id=&status=&position=
+const exportAgents = async (req, res, next) => {
+  try {
+    const status = req.query.status ? String(req.query.status).toUpperCase() : '';
+    if (status && !STATUSES.includes(status)) {
+      throw createError('Statut invalide (ACTIVE ou INACTIVE)', 400);
+    }
+
+    const filters = {
+      search: String(req.query.search || '').trim(),
+      departmentId: parseInt(req.query.department_id, 10) || null,
+      status,
+      position: String(req.query.position || '').trim(),
+    };
+
+    const agents = await Agent.findAllForExport(filters);
+
+    const csv = toCSV(agents, [
+      { key: 'last_name', label: 'Nom' },
+      { key: 'first_name', label: 'Prénom' },
+      { key: 'email', label: 'Email' },
+      { key: 'phone', label: 'Téléphone' },
+      { key: 'department_name', label: 'Département' },
+      { key: 'position', label: 'Poste' },
+      { key: 'salary', label: 'Salaire' },
+      { key: 'status', label: 'Statut' },
+      { key: 'hire_date', label: "Date d'embauche" },
+    ]);
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="agents_${Date.now()}.csv"`);
+    res.send(csv);
+  } catch (error) {
+    next(error);
+  }
+};
 module.exports = {
   getAgents,
   getAgentById,
   createAgent,
   updateAgent,
   deleteAgent,
+  exportAgents
 };

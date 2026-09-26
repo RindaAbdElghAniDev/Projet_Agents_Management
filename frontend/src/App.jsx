@@ -11,22 +11,21 @@ import Departments from './pages/Departments';
 import Attendance from './pages/Attendance';
 import Leaves from './pages/Leaves';
 import Logs from './pages/Logs';
+import Profile from './pages/Profile';
 
 function App() {
   return (
     <Routes>
-      {/* Pages publiques */}
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
 
-      {/* Pages privées (connecté) avec Sidebar + Navbar */}
       <Route element={<ProtectedRoute />}>
         <Route element={<Layout />}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/attendance" element={<Attendance />} />
           <Route path="/leaves" element={<Leaves />} />
+          <Route path="/profile" element={<Profile />} />
 
-          {/* Pages réservées à l'Admin */}
           <Route element={<AdminRoute />}>
             <Route path="/agents" element={<Agents />} />
             <Route path="/agents/:id" element={<AgentDetails />} />
@@ -36,7 +35,6 @@ function App() {
         </Route>
       </Route>
 
-      {/* Redirections */}
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>

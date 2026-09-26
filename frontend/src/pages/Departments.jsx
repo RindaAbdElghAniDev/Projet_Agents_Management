@@ -1,29 +1,45 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import toast from 'react-hot-toast';
+import { HiOutlinePlus, HiOutlineOfficeBuilding, HiOutlinePencil, HiOutlineTrash } from 'react-icons/hi';
 import api from '../services/api';
-
-const EMPTY_FORM = { name: '', description: '' };
+import { departmentSchema } from '../lib/validators';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import Input from '../components/ui/Input';
+import Modal from '../components/ui/Modal';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import Skeleton from '../components/ui/Skeleton';
+import EmptyState from '../components/ui/EmptyState';
+import SortableHeader from '../components/ui/SortableHeader';
 
 const Departments = () => {
   const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState({ type: '', text: '' });
+  const [sort, setSort] = useState({ sortBy: 'name', sortOrder: 'asc' });
 
-  // ----- Fenêtre modale (ajout / modification) -----
-  const [showModal, setShowModal] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [formErrors, setFormErrors] = useState({});
-  const [formServerError, setFormServerError] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingDept, setEditingDept] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  // ----- Chargement de la liste -----
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm({ resolver: zodResolver(departmentSchema) });
+
   const fetchDepartments = async () => {
     try {
       setLoading(true);
       const res = await api.get('/departments');
       setDepartments(res.data.departments);
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      toast.error(err.message);
     } finally {
       setLoading(false);
     }
@@ -33,196 +49,182 @@ const Departments = () => {
     fetchDepartments();
   }, []);
 
-  // ----- Modale -----
+  const handleSort = (key) => {
+    setSort((prev) =>
+      prev.sortBy === key
+        ? { sortBy: key, sortOrder: prev.sortOrder === 'asc' ? 'desc' : 'asc' }
+        : { sortBy: key, sortOrder: 'asc' }
+    );
+  };
+
+  // Tri côté client : la liste complète est déjà chargée (pas de pagination pour les départements)
+  const sortedDepartments = useMemo(() => {
+    const copy = [...departments];
+    copy.sort((a, b) => {
+      let valA = a[sort.sortBy];
+      let valB = b[sort.sortBy];
+      if (typeof valA === 'string') {
+        valA = valA.toLowerCase();
+        valB = valB.toLowerCase();
+      }
+      if (valA < valB) return sort.sortOrder === 'asc' ? -1 : 1;
+      if (valA > valB) return sort.sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return copy;
+  }, [departments, sort]);
+
   const openAdd = () => {
-    setEditingId(null);
-    setForm(EMPTY_FORM);
-    setFormErrors({});
-    setFormServerError('');
-    setShowModal(true);
+    setEditingDept(null);
+    reset({ name: '', description: '' });
+    setModalOpen(true);
   };
 
   const openEdit = (department) => {
-    setEditingId(department.id);
-    setForm({
-      name: department.name,
-      description: department.description || '',
-    });
-    setFormErrors({});
-    setFormServerError('');
-    setShowModal(true);
+    setEditingDept(department);
+    reset({ name: department.name, description: department.description || '' });
+    setModalOpen(true);
   };
 
-  const handleFormChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-  };
-
-  const validateForm = () => {
-    const errs = {};
-    if (!form.name.trim()) {
-      errs.name = 'Le nom est obligatoire';
-    } else if (form.name.trim().length > 100) {
-      errs.name = 'Le nom ne doit pas dépasser 100 caractères';
-    }
-    if (form.description.trim().length > 255) {
-      errs.description = 'La description ne doit pas dépasser 255 caractères';
-    }
-    return errs;
-  };
-
-  const handleSave = async (e) => {
-    e.preventDefault();
-    setFormServerError('');
-
-    const errs = validateForm();
-    setFormErrors(errs);
-    if (Object.keys(errs).length > 0) return;
-
+  const onSubmit = async (data) => {
     try {
       setSaving(true);
-      if (editingId) {
-        await api.put(`/departments/${editingId}`, form);
+      if (editingDept) {
+        await api.put(`/departments/${editingDept.id}`, data);
+        toast.success('Département modifié avec succès');
       } else {
-        await api.post('/departments', form);
+        await api.post('/departments', data);
+        toast.success('Département ajouté avec succès');
       }
-      setShowModal(false);
-      setMessage({
-        type: 'success',
-        text: editingId ? 'Département modifié avec succès' : 'Département ajouté avec succès',
-      });
+      setModalOpen(false);
       fetchDepartments();
     } catch (err) {
-      setFormServerError(err.message);
+      toast.error(err.message);
     } finally {
       setSaving(false);
     }
   };
 
-  // ----- Suppression -----
-  const handleDelete = async (department) => {
-    if (!window.confirm(`Supprimer le département « ${department.name} » ?`)) return;
-
+  const handleDelete = async () => {
     try {
-      await api.delete(`/departments/${department.id}`);
-      setMessage({ type: 'success', text: 'Département supprimé avec succès' });
+      setDeleting(true);
+      await api.delete(`/departments/${deleteTarget.id}`);
+      toast.success('Département supprimé avec succès');
+      setDeleteTarget(null);
       fetchDepartments();
     } catch (err) {
-      // Ex. : « Impossible de supprimer : 3 agent(s) appartiennent encore à ce département »
-      setMessage({ type: 'error', text: err.message });
+      toast.error(err.message);
+    } finally {
+      setDeleting(false);
     }
   };
 
   return (
-    <div className="panel">
-      <div className="page-header">
-        <h1>Départements</h1>
-        <button className="btn btn-primary btn-auto" onClick={openAdd}>
-          + Ajouter un département
-        </button>
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Départements</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{departments.length} département(s)</p>
+        </div>
+        <Button icon={HiOutlinePlus} onClick={openAdd}>Ajouter un département</Button>
       </div>
 
-      {message.text && (
-        <div className={`alert alert-${message.type === 'success' ? 'success' : 'error'}`}>
-          {message.text}
-        </div>
-      )}
-
-      {/* ----- Tableau ----- */}
-      <div className="table-wrapper">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Nom</th>
-              <th>Description</th>
-              <th>Agents</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan="4" className="table-empty">Chargement...</td></tr>
-            ) : departments.length === 0 ? (
-              <tr><td colSpan="4" className="table-empty">Aucun département</td></tr>
-            ) : (
-              departments.map((department) => (
-                <tr key={department.id}>
-                  <td><strong>{department.name}</strong></td>
-                  <td>{department.description || '-'}</td>
-                  <td>{department.agents_count}</td>
-                  <td className="actions">
-                    <button
-                      className="btn btn-primary btn-sm btn-auto"
-                      onClick={() => openEdit(department)}
-                    >
-                      Modifier
-                    </button>
-                    <button
-                      className="btn btn-danger btn-sm btn-auto"
-                      onClick={() => handleDelete(department)}
-                    >
-                      Supprimer
-                    </button>
+      <Card>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="border-b border-gray-100 dark:border-gray-700">
+                <SortableHeader label="Nom" sortKey="name" currentSort={sort} onSort={handleSort} />
+                <SortableHeader label="Description" sortKey="description" currentSort={sort} onSort={handleSort} />
+                <SortableHeader label="Agents" sortKey="agents_count" currentSort={sort} onSort={handleSort} />
+                <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              {loading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <tr key={i}>
+                    {Array.from({ length: 4 }).map((__, j) => (
+                      <td key={j} className="px-4 py-3">
+                        <Skeleton className="h-4 w-full" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : sortedDepartments.length === 0 ? (
+                <tr>
+                  <td colSpan="4">
+                    <EmptyState
+                      icon={HiOutlineOfficeBuilding}
+                      title="Aucun département"
+                      description="Commence par en ajouter un."
+                    />
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* ----- Modale ajout / modification ----- */}
-      {showModal && (
-        <div className="modal-overlay">
-          <div className="modal">
-            <h2>{editingId ? 'Modifier le département' : 'Ajouter un département'}</h2>
-
-            {formServerError && <div className="alert alert-error">{formServerError}</div>}
-
-            <form onSubmit={handleSave} noValidate>
-              <div className="form-group">
-                <label htmlFor="name">Nom</label>
-                <input
-                  id="name"
-                  type="text"
-                  name="name"
-                  value={form.name}
-                  onChange={handleFormChange}
-                  placeholder="Ex. : Juridique"
-                />
-                {formErrors.name && <span className="field-error">{formErrors.name}</span>}
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="description">Description (optionnelle)</label>
-                <input
-                  id="description"
-                  type="text"
-                  name="description"
-                  value={form.description}
-                  onChange={handleFormChange}
-                  placeholder="Ex. : Service juridique et conformité"
-                />
-                {formErrors.description && (
-                  <span className="field-error">{formErrors.description}</span>
-                )}
-              </div>
-
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-auto"
-                  onClick={() => setShowModal(false)}
-                >
-                  Annuler
-                </button>
-                <button type="submit" className="btn btn-primary btn-auto" disabled={saving}>
-                  {saving ? 'Enregistrement...' : 'Enregistrer'}
-                </button>
-              </div>
-            </form>
-          </div>
+              ) : (
+                sortedDepartments.map((department) => (
+                  <tr key={department.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900 dark:text-gray-100">
+                      {department.name}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                      {department.description || '-'}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                      {department.agents_count}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-1">
+                        <button
+                          onClick={() => openEdit(department)}
+                          className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700"
+                          title="Modifier"
+                        >
+                          <HiOutlinePencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget(department)}
+                          className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+                          title="Supprimer"
+                        >
+                          <HiOutlineTrash className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
-      )}
+      </Card>
+
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editingDept ? 'Modifier le département' : 'Ajouter un département'}
+      >
+        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
+          <Input label="Nom" error={errors.name?.message} {...register('name')} />
+          <Input label="Description (optionnelle)" error={errors.description?.message} {...register('description')} />
+          <div className="mt-2 flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Annuler</Button>
+            <Button type="submit" loading={saving}>Enregistrer</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDelete}
+        loading={deleting}
+        title="Supprimer le département"
+        message={deleteTarget ? `Supprimer « ${deleteTarget.name} » ? Cette action est irréversible.` : ''}
+        confirmLabel="Supprimer"
+      />
     </div>
   );
 };

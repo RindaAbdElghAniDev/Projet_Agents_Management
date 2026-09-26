@@ -3,18 +3,15 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/userModel');
 const Agent = require('../models/agentModel');
 const Log = require('../models/logModel');
-// Crée une erreur avec un code HTTP (lue par errorMiddleware)
+
 const createError = (message, statusCode) => {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
 };
 
-// Génère un JWT contenant uniquement l'id de l'utilisateur
 const generateToken = (userId) => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN,
-  });
+  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
 };
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -28,7 +25,6 @@ const register = async (req, res, next) => {
     const password = String(body.password || '');
     const confirmPassword = String(body.confirmPassword || '');
 
-    // 1. Validation côté serveur
     if (!name || !email || !password || !confirmPassword) {
       throw createError('Tous les champs sont obligatoires', 400);
     }
@@ -42,23 +38,16 @@ const register = async (req, res, next) => {
       throw createError('Les mots de passe ne correspondent pas', 400);
     }
 
-    // 2. L'email existe-t-il déjà ?
     const existingUser = await User.findByEmail(email);
     if (existingUser) {
       throw createError('Cet email est déjà utilisé', 409);
     }
 
-    // 3. Hash du mot de passe
     const hashedPassword = await bcrypt.hash(password, 10);
-  
-    // 4. Enregistrement dans MySQL (le rôle est toujours AGENT)
-    const userId = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-    });
-  await Agent.linkUserByEmail(userId, email);
-    // 5. Réponse sans le mot de passe
+    const userId = await User.create({ name, email, password: hashedPassword });
+
+    await Agent.linkUserByEmail(userId, email);
+
     res.status(201).json({
       success: true,
       message: 'Compte créé avec succès',
@@ -80,46 +69,36 @@ const login = async (req, res, next) => {
       throw createError('Email et mot de passe obligatoires', 400);
     }
 
-    // 1. Chercher l'utilisateur
     const user = await User.findByEmail(email);
-
-    // 2. Comparer le mot de passe
-    // Même message si l'email n'existe pas ou si le mot de passe est faux
     const isMatch = user ? await bcrypt.compare(password, user.password) : false;
     if (!isMatch) {
       throw createError('Email ou mot de passe incorrect', 401);
     }
 
-    // 3. Générer le token
     const token = generateToken(user.id);
-    // Log de connexion (ne bloque jamais la réponse en cas d'erreur)
+
     await Log.create(user.id, 'LOGIN', `${user.name} s'est connecté`);
-    // 4. Réponse : token + infos utilisateur (sans le mot de passe)
+
     res.json({
       success: true,
       message: 'Connexion réussie',
       token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
     });
   } catch (error) {
     next(error);
   }
 };
+
+// GET /api/auth/me
 const getMe = async (req, res, next) => {
   try {
-    res.json({
-      success: true,
-      user: req.user,
-    });
+    res.json({ success: true, user: req.user });
   } catch (error) {
     next(error);
   }
 };
+
 // POST /api/auth/logout
 const logout = async (req, res, next) => {
   try {
@@ -129,4 +108,70 @@ const logout = async (req, res, next) => {
     next(error);
   }
 };
-module.exports = { register, login, getMe, logout };
+
+// PUT /api/auth/profile
+const updateProfile = async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const name = String(body.name || '').trim();
+    const email = String(body.email || '').trim().toLowerCase();
+
+    if (!name) {
+      throw createError('Le nom est obligatoire', 400);
+    }
+    if (name.length > 100) {
+      throw createError('Le nom ne doit pas dépasser 100 caractères', 400);
+    }
+    if (!EMAIL_REGEX.test(email)) {
+      throw createError("Format d'email invalide", 400);
+    }
+
+    // L'email ne doit pas appartenir à un AUTRE compte
+    const existing = await User.findByEmail(email);
+    if (existing && existing.id !== req.user.id) {
+      throw createError('Cet email est déjà utilisé par un autre compte', 409);
+    }
+
+    await User.updateProfile(req.user.id, { name, email });
+    const user = await User.findById(req.user.id);
+
+    await Log.create(req.user.id, 'UPDATE_PROFILE', `${user.name} a modifié son profil`);
+
+    res.json({ success: true, message: 'Profil mis à jour avec succès', user });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// PUT /api/auth/password
+const changePassword = async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const currentPassword = String(body.currentPassword || '');
+    const newPassword = String(body.newPassword || '');
+
+    if (!currentPassword || !newPassword) {
+      throw createError('Tous les champs sont obligatoires', 400);
+    }
+    if (newPassword.length < 6) {
+      throw createError('Le nouveau mot de passe doit contenir au moins 6 caractères', 400);
+    }
+
+    const user = await User.findByIdWithPassword(req.user.id);
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      throw createError('Mot de passe actuel incorrect', 401);
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await User.updatePassword(req.user.id, hashedPassword);
+
+    await Log.create(req.user.id, 'CHANGE_PASSWORD', `${user.name} a changé son mot de passe`);
+
+    res.json({ success: true, message: 'Mot de passe modifié avec succès' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { register, login, getMe, logout, updateProfile, changePassword };

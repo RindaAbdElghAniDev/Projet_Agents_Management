@@ -3,7 +3,7 @@ const Agent = require('../models/agentModel');
 const Log = require('../models/logModel');
 const STATUSES = ['PRESENT', 'ABSENT', 'LATE', 'LEAVE'];
 const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
-
+const { toCSV } = require('../utils/csv');
 const createError = (message, statusCode) => {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -222,9 +222,39 @@ const updateAttendance = async (req, res, next) => {
     next(error);
   }
 };
-module.exports = {
-  getAttendance,
-  getAttendanceById,
-  createAttendance,
-  updateAttendance,
+// GET /api/attendance/export?agent_id=&status=&date_from=&date_to= (Admin)
+const exportAttendance = async (req, res, next) => {
+  try {
+    const status = req.query.status ? String(req.query.status).toUpperCase() : '';
+    if (status && !STATUSES.includes(status)) {
+      throw createError('Statut invalide (PRESENT, ABSENT, LATE ou LEAVE)', 400);
+    }
+
+    const dateFrom = String(req.query.date_from || '').trim();
+    const dateTo = String(req.query.date_to || '').trim();
+    if ((dateFrom && !isValidDate(dateFrom)) || (dateTo && !isValidDate(dateTo))) {
+      throw createError('Date de filtre invalide (AAAA-MM-JJ)', 400);
+    }
+
+    const agentId = parseInt(req.query.agent_id, 10) || null;
+
+    const records = await Attendance.findAllForExport({ agentId, status, dateFrom, dateTo });
+
+    const csv = toCSV(records, [
+      { key: 'attendance_date', label: 'Date' },
+      { key: 'last_name', label: 'Nom' },
+      { key: 'first_name', label: 'Prénom' },
+      { key: 'department_name', label: 'Département' },
+      { key: 'check_in', label: 'Arrivée' },
+      { key: 'check_out', label: 'Départ' },
+      { key: 'status', label: 'Statut' },
+    ]);
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="presences_${Date.now()}.csv"`);
+    res.send(csv);
+  } catch (error) {
+    next(error);
+  }
 };
+module.exports = { getAttendance, getAttendanceById, createAttendance, updateAttendance, exportAttendance };

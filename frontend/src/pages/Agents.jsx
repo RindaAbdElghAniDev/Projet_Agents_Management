@@ -1,92 +1,108 @@
 import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
+import {
+  HiOutlineSearch,
+  HiOutlinePlus,
+  HiOutlineDownload,
+  HiOutlineUsers,
+  HiOutlineEye,
+  HiOutlinePencil,
+  HiOutlineTrash,
+} from 'react-icons/hi';
 import api from '../services/api';
-
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const EMPTY_FORM = {
-  first_name: '',
-  last_name: '',
-  email: '',
-  phone: '',
-  address: '',
-  birth_date: '',
-  hire_date: '',
-  department_id: '',
-  position: '',
-  salary: '',
-  status: 'ACTIVE',
-};
+import { agentSchema } from '../lib/validators';
+import { downloadFile } from '../lib/download';
+import { getToday } from '../lib/date';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import Input from '../components/ui/Input';
+import Select from '../components/ui/Select';
+import Modal from '../components/ui/Modal';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import Badge from '../components/ui/Badge';
+import Skeleton from '../components/ui/Skeleton';
+import EmptyState from '../components/ui/EmptyState';
+import Pagination from '../components/ui/Pagination';
+import SortableHeader from '../components/ui/SortableHeader';
 
 const EMPTY_FILTERS = { search: '', department_id: '', status: '', position: '' };
 
 const Agents = () => {
-  // ----- Données de la liste -----
   const [agents, setAgents] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState({ type: '', text: '' });
+  const [exporting, setExporting] = useState(false);
 
-  // ----- Filtres et pagination -----
-  const [filters, setFilters] = useState(EMPTY_FILTERS); // ce que l'utilisateur tape
-  const [appliedFilters, setAppliedFilters] = useState(EMPTY_FILTERS); // ce qui est envoyé
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState({ sortBy: 'name', sortOrder: 'asc' });
 
-  // ----- Fenêtre modale (ajout / modification) -----
-  const [showModal, setShowModal] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [formErrors, setFormErrors] = useState({});
-  const [formServerError, setFormServerError] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingAgent, setEditingAgent] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  // ----- Chargement des données -----
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm({ resolver: zodResolver(agentSchema) });
+
   const fetchAgents = async () => {
     try {
       setLoading(true);
-      const params = { page, limit: 10 };
+      const params = { page, limit: 10, sort_by: sort.sortBy, sort_order: sort.sortOrder };
       Object.entries(appliedFilters).forEach(([key, value]) => {
-        if (value) params[key] = value; // on n'envoie que les filtres remplis
+        if (value) params[key] = value;
       });
-
       const res = await api.get('/agents', { params });
       setAgents(res.data.agents);
       setPagination(res.data.pagination);
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      toast.error(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Les départements servent au filtre et au formulaire
   useEffect(() => {
     const fetchDepartments = async () => {
       try {
         const res = await api.get('/departments');
         setDepartments(res.data.departments);
       } catch (err) {
-        setMessage({ type: 'error', text: err.message });
+        toast.error(err.message);
       }
     };
     fetchDepartments();
   }, []);
 
-  // Recharge la liste quand la page ou les filtres appliqués changent
   useEffect(() => {
     fetchAgents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, appliedFilters]);
+  }, [page, appliedFilters, sort]);
 
-  // ----- Recherche et filtres -----
-  const handleFilterChange = (e) => {
-    setFilters({ ...filters, [e.target.name]: e.target.value });
+  const handleSort = (key) => {
+    setSort((prev) =>
+      prev.sortBy === key
+        ? { sortBy: key, sortOrder: prev.sortOrder === 'asc' ? 'desc' : 'asc' }
+        : { sortBy: key, sortOrder: 'asc' }
+    );
   };
+
+  const handleFilterChange = (e) => setFilters({ ...filters, [e.target.name]: e.target.value });
 
   const handleSearch = (e) => {
     e.preventDefault();
-    setPage(1); // une nouvelle recherche repart de la page 1
+    setPage(1);
     setAppliedFilters(filters);
   };
 
@@ -96,18 +112,33 @@ const Agents = () => {
     setPage(1);
   };
 
-  // ----- Modale -----
+  const handleExport = async () => {
+    try {
+      setExporting(true);
+      const params = {};
+      Object.entries(appliedFilters).forEach(([key, value]) => {
+        if (value) params[key] = value;
+      });
+      await downloadFile('/agents/export', params, `agents_${getToday()}.csv`);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const openAdd = () => {
-    setEditingId(null);
-    setForm(EMPTY_FORM);
-    setFormErrors({});
-    setFormServerError('');
-    setShowModal(true);
+    setEditingAgent(null);
+    reset({
+      first_name: '', last_name: '', email: '', phone: '', address: '',
+      birth_date: '', hire_date: '', department_id: '', position: '', salary: '', status: 'ACTIVE',
+    });
+    setModalOpen(true);
   };
 
   const openEdit = (agent) => {
-    setEditingId(agent.id);
-    setForm({
+    setEditingAgent(agent);
+    reset({
       first_name: agent.first_name,
       last_name: agent.last_name,
       email: agent.email,
@@ -120,266 +151,233 @@ const Agents = () => {
       salary: String(agent.salary),
       status: agent.status,
     });
-    setFormErrors({});
-    setFormServerError('');
-    setShowModal(true);
+    setModalOpen(true);
   };
 
-  const handleFormChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-  };
-
-  const validateForm = () => {
-    const errs = {};
-    if (!form.first_name.trim()) errs.first_name = 'Le prénom est obligatoire';
-    if (!form.last_name.trim()) errs.last_name = 'Le nom est obligatoire';
-    if (!EMAIL_REGEX.test(form.email.trim())) errs.email = "Format d'email invalide";
-    if (!form.hire_date) errs.hire_date = "La date d'embauche est obligatoire";
-    if (!form.department_id) errs.department_id = 'Le département est obligatoire';
-    if (!form.position.trim()) errs.position = 'Le poste est obligatoire';
-    if (form.salary === '' || Number(form.salary) < 0) {
-      errs.salary = 'Le salaire doit être un nombre positif';
-    }
-    return errs;
-  };
-
-  const handleSave = async (e) => {
-    e.preventDefault();
-    setFormServerError('');
-
-    const errs = validateForm();
-    setFormErrors(errs);
-    if (Object.keys(errs).length > 0) return;
-
+  const onSubmit = async (data) => {
     try {
       setSaving(true);
-      if (editingId) {
-        await api.put(`/agents/${editingId}`, form);
+      if (editingAgent) {
+        await api.put(`/agents/${editingAgent.id}`, data);
+        toast.success('Agent modifié avec succès');
       } else {
-        await api.post('/agents', form);
+        await api.post('/agents', data);
+        toast.success('Agent ajouté avec succès');
       }
-      setShowModal(false);
-      setMessage({
-        type: 'success',
-        text: editingId ? 'Agent modifié avec succès' : 'Agent ajouté avec succès',
-      });
+      setModalOpen(false);
       fetchAgents();
     } catch (err) {
-      setFormServerError(err.message);
+      toast.error(err.message);
     } finally {
       setSaving(false);
     }
   };
 
-  // ----- Suppression -----
-  const handleDelete = async (agent) => {
-    if (!window.confirm(`Supprimer ${agent.first_name} ${agent.last_name} ?`)) return;
-
+  const handleDelete = async () => {
     try {
-      await api.delete(`/agents/${agent.id}`);
-      setMessage({ type: 'success', text: 'Agent supprimé avec succès' });
-
-      // Si on supprime le dernier agent de la page, on recule d'une page
+      setDeleting(true);
+      await api.delete(`/agents/${deleteTarget.id}`);
+      toast.success('Agent supprimé avec succès');
+      setDeleteTarget(null);
       if (agents.length === 1 && page > 1) {
         setPage(page - 1);
       } else {
         fetchAgents();
       }
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      toast.error(err.message);
+    } finally {
+      setDeleting(false);
     }
   };
 
-  // Petit helper pour éviter de répéter les champs texte du formulaire
-  const renderField = (name, label, type = 'text') => (
-    <div className="form-group">
-      <label htmlFor={name}>{label}</label>
-      <input id={name} type={type} name={name} value={form[name]} onChange={handleFormChange} />
-      {formErrors[name] && <span className="field-error">{formErrors[name]}</span>}
-    </div>
-  );
+  const hasActiveFilters = Object.values(appliedFilters).some(Boolean);
 
   return (
-    <div className="panel">
-      <div className="page-header">
-        <h1>Agents</h1>
-        <button className="btn btn-primary btn-auto" onClick={openAdd}>
-          + Ajouter un agent
-        </button>
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Agents</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{pagination.total} agent(s) au total</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="secondary" icon={HiOutlineDownload} loading={exporting} onClick={handleExport}>
+            Exporter
+          </Button>
+          <Button icon={HiOutlinePlus} onClick={openAdd}>Ajouter un agent</Button>
+        </div>
       </div>
 
-      {message.text && (
-        <div className={`alert alert-${message.type === 'success' ? 'success' : 'error'}`}>
-          {message.text}
-        </div>
-      )}
+      <Card>
+        <form onSubmit={handleSearch} className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <Input
+            placeholder="Nom, prénom ou email"
+            icon={HiOutlineSearch}
+            name="search"
+            value={filters.search}
+            onChange={handleFilterChange}
+          />
+          <Select name="department_id" value={filters.department_id} onChange={handleFilterChange}>
+            <option value="">Tous les départements</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </Select>
+          <Select name="status" value={filters.status} onChange={handleFilterChange}>
+            <option value="">Tous les statuts</option>
+            <option value="ACTIVE">Actif</option>
+            <option value="INACTIVE">Inactif</option>
+          </Select>
+          <Input placeholder="Poste" name="position" value={filters.position} onChange={handleFilterChange} />
+          <div className="flex gap-2">
+            <Button type="submit" variant="secondary" className="flex-1">Filtrer</Button>
+            {hasActiveFilters && (
+              <Button type="button" variant="ghost" onClick={handleReset}>Réinitialiser</Button>
+            )}
+          </div>
+        </form>
 
-      {/* ----- Recherche et filtres ----- */}
-      <form className="filters" onSubmit={handleSearch}>
-        <input
-          type="text"
-          name="search"
-          placeholder="Nom, prénom ou email"
-          value={filters.search}
-          onChange={handleFilterChange}
-        />
-        <select name="department_id" value={filters.department_id} onChange={handleFilterChange}>
-          <option value="">Tous les départements</option>
-          {departments.map((d) => (
-            <option key={d.id} value={d.id}>{d.name}</option>
-          ))}
-        </select>
-        <select name="status" value={filters.status} onChange={handleFilterChange}>
-          <option value="">Tous les statuts</option>
-          <option value="ACTIVE">Actif</option>
-          <option value="INACTIVE">Inactif</option>
-        </select>
-        <input
-          type="text"
-          name="position"
-          placeholder="Poste"
-          value={filters.position}
-          onChange={handleFilterChange}
-        />
-        <button type="submit" className="btn btn-primary btn-auto">Rechercher</button>
-        <button type="button" className="btn btn-secondary btn-auto" onClick={handleReset}>
-          Réinitialiser
-        </button>
-      </form>
-
-      {/* ----- Tableau ----- */}
-      <div className="table-wrapper">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Nom</th>
-              <th>Email</th>
-              <th>Département</th>
-              <th>Poste</th>
-              <th>Statut</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan="6" className="table-empty">Chargement...</td></tr>
-            ) : agents.length === 0 ? (
-              <tr><td colSpan="6" className="table-empty">Aucun agent trouvé</td></tr>
-            ) : (
-              agents.map((agent) => (
-                <tr key={agent.id}>
-                  <td>{agent.last_name} {agent.first_name}</td>
-                  <td>{agent.email}</td>
-                  <td>{agent.department_name}</td>
-                  <td>{agent.position}</td>
-                  <td>
-                    <span className={`badge ${agent.status === 'ACTIVE' ? 'badge-active' : 'badge-inactive'}`}>
-                      {agent.status === 'ACTIVE' ? 'Actif' : 'Inactif'}
-                    </span>
-                  </td>
-                  <td className="actions">
-                    <Link to={`/agents/${agent.id}`} className="btn btn-secondary btn-sm btn-auto">
-                      Détails
-                    </Link>
-                    <button className="btn btn-primary btn-sm btn-auto" onClick={() => openEdit(agent)}>
-                      Modifier
-                    </button>
-                    <button className="btn btn-danger btn-sm btn-auto" onClick={() => handleDelete(agent)}>
-                      Supprimer
-                    </button>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="border-b border-gray-100 dark:border-gray-700">
+                <SortableHeader label="Nom" sortKey="name" currentSort={sort} onSort={handleSort} />
+                <SortableHeader label="Email" sortKey="email" currentSort={sort} onSort={handleSort} />
+                <SortableHeader label="Département" sortKey="department" currentSort={sort} onSort={handleSort} />
+                <SortableHeader label="Poste" sortKey="position" currentSort={sort} onSort={handleSort} />
+                <SortableHeader label="Statut" sortKey="status" currentSort={sort} onSort={handleSort} />
+                <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              {loading ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <tr key={i}>
+                    {Array.from({ length: 6 }).map((__, j) => (
+                      <td key={j} className="px-4 py-3">
+                        <Skeleton className="h-4 w-full" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : agents.length === 0 ? (
+                <tr>
+                  <td colSpan="6">
+                    <EmptyState
+                      icon={HiOutlineUsers}
+                      title="Aucun agent trouvé"
+                      description={hasActiveFilters ? 'Essaie de modifier tes filtres.' : 'Commence par ajouter un agent.'}
+                    />
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* ----- Pagination ----- */}
-      <div className="pagination">
-        <button
-          className="btn btn-secondary btn-sm btn-auto"
-          disabled={page <= 1}
-          onClick={() => setPage(page - 1)}
-        >
-          Précédent
-        </button>
-        <span>
-          Page {pagination.page} sur {Math.max(pagination.totalPages, 1)} ({pagination.total} agents)
-        </span>
-        <button
-          className="btn btn-secondary btn-sm btn-auto"
-          disabled={page >= pagination.totalPages}
-          onClick={() => setPage(page + 1)}
-        >
-          Suivant
-        </button>
-      </div>
-
-      {/* ----- Modale ajout / modification ----- */}
-      {showModal && (
-        <div className="modal-overlay">
-          <div className="modal">
-            <h2>{editingId ? "Modifier l'agent" : 'Ajouter un agent'}</h2>
-
-            {formServerError && <div className="alert alert-error">{formServerError}</div>}
-
-            <form onSubmit={handleSave} noValidate>
-              <div className="form-grid">
-                {renderField('first_name', 'Prénom')}
-                {renderField('last_name', 'Nom')}
-                {renderField('email', 'Email', 'email')}
-                {renderField('phone', 'Téléphone')}
-                {renderField('address', 'Adresse')}
-                {renderField('birth_date', 'Date de naissance', 'date')}
-                {renderField('hire_date', "Date d'embauche", 'date')}
-
-                <div className="form-group">
-                  <label htmlFor="department_id">Département</label>
-                  <select
-                    id="department_id"
-                    name="department_id"
-                    value={form.department_id}
-                    onChange={handleFormChange}
-                  >
-                    <option value="">Choisir...</option>
-                    {departments.map((d) => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))}
-                  </select>
-                  {formErrors.department_id && (
-                    <span className="field-error">{formErrors.department_id}</span>
-                  )}
-                </div>
-
-                {renderField('position', 'Poste')}
-                {renderField('salary', 'Salaire', 'number')}
-
-                <div className="form-group">
-                  <label htmlFor="status">Statut</label>
-                  <select id="status" name="status" value={form.status} onChange={handleFormChange}>
-                    <option value="ACTIVE">Actif</option>
-                    <option value="INACTIVE">Inactif</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-auto"
-                  onClick={() => setShowModal(false)}
-                >
-                  Annuler
-                </button>
-                <button type="submit" className="btn btn-primary btn-auto" disabled={saving}>
-                  {saving ? 'Enregistrement...' : 'Enregistrer'}
-                </button>
-              </div>
-            </form>
-          </div>
+              ) : (
+                agents.map((agent) => (
+                  <tr key={agent.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900 dark:text-gray-100">
+                      {agent.last_name} {agent.first_name}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{agent.email}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{agent.department_name}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{agent.position}</td>
+                    <td className="px-4 py-3">
+                      <Badge color={agent.status === 'ACTIVE' ? 'green' : 'red'}>
+                        {agent.status === 'ACTIVE' ? 'Actif' : 'Inactif'}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-1">
+                        <Link
+                          to={`/agents/${agent.id}`}
+                          className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                          title="Détails"
+                        >
+                          <HiOutlineEye className="h-4 w-4" />
+                        </Link>
+                        <button
+                          onClick={() => openEdit(agent)}
+                          className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700"
+                          title="Modifier"
+                        >
+                          <HiOutlinePencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget(agent)}
+                          className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+                          title="Supprimer"
+                        >
+                          <HiOutlineTrash className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
-      )}
+
+        {!loading && agents.length > 0 && (
+          <div className="mt-4">
+            <Pagination
+              page={pagination.page}
+              totalPages={pagination.totalPages}
+              total={pagination.total}
+              label="agents"
+              onChange={setPage}
+            />
+          </div>
+        )}
+      </Card>
+
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editingAgent ? "Modifier l'agent" : 'Ajouter un agent'}
+        size="lg"
+      >
+        <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-1 gap-4 sm:grid-cols-2" noValidate>
+          <Input label="Prénom" error={errors.first_name?.message} {...register('first_name')} />
+          <Input label="Nom" error={errors.last_name?.message} {...register('last_name')} />
+          <Input label="Email" type="email" error={errors.email?.message} {...register('email')} />
+          <Input label="Téléphone" error={errors.phone?.message} {...register('phone')} />
+          <Input label="Adresse" className="sm:col-span-2" error={errors.address?.message} {...register('address')} />
+          <Input label="Date de naissance" type="date" error={errors.birth_date?.message} {...register('birth_date')} />
+          <Input label="Date d'embauche" type="date" error={errors.hire_date?.message} {...register('hire_date')} />
+          <Select label="Département" error={errors.department_id?.message} {...register('department_id')}>
+            <option value="">Choisir...</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </Select>
+          <Input label="Poste" error={errors.position?.message} {...register('position')} />
+          <Input label="Salaire" type="number" step="0.01" error={errors.salary?.message} {...register('salary')} />
+          <Select label="Statut" error={errors.status?.message} {...register('status')}>
+            <option value="ACTIVE">Actif</option>
+            <option value="INACTIVE">Inactif</option>
+          </Select>
+
+          <div className="col-span-full mt-2 flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Annuler</Button>
+            <Button type="submit" loading={saving}>Enregistrer</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDelete}
+        loading={deleting}
+        title="Supprimer l'agent"
+        message={
+          deleteTarget
+            ? `Supprimer définitivement ${deleteTarget.first_name} ${deleteTarget.last_name} ? Cette action est irréversible.`
+            : ''
+        }
+        confirmLabel="Supprimer"
+      />
     </div>
   );
 };

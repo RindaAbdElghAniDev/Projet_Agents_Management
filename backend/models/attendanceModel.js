@@ -87,5 +87,13 @@ const update = async (id, { check_in, check_out, status }) => {
   );
   return result.affectedRows;
 };
-
-module.exports = { findAll, findById, findByAgentAndDate, create, update };
+// Liste complète (sans pagination), pour l'export CSV. Plafonnée à 5000 lignes par sécurité.
+const findAllForExport = async (filters) => {
+  const { where, params } = buildWhere(filters);
+  const [records] = await pool.query(
+    `${SELECT_ATTENDANCE} ${where} ORDER BY att.attendance_date DESC, a.last_name ASC LIMIT 5000`,
+    params
+  );
+  return records;
+};
+module.exports = { findAll, findById, findByAgentAndDate,findAllForExport, create, update };

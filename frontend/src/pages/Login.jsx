@@ -1,103 +1,76 @@
-import { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import api, { saveSession } from '../services/api';
-
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import toast from 'react-hot-toast';
+import { HiOutlineMail } from 'react-icons/hi';
+import { useAuth } from '../context/AuthContext';
+import { loginSchema } from '../lib/validators';
+import Input from '../components/ui/Input';
+import Button from '../components/ui/Button';
 
 const Login = () => {
+  const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-
-  const [form, setForm] = useState({ email: '', password: '' });
-  const [errors, setErrors] = useState({});
-  const [serverError, setServerError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  // Message envoyé par la page Register après une inscription réussie
   const successMessage = location.state?.message;
 
-  const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-  };
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm({ resolver: zodResolver(loginSchema) });
 
-  const validate = () => {
-    const newErrors = {};
-    if (!EMAIL_REGEX.test(form.email.trim())) {
-      newErrors.email = "Format d'email invalide";
-    }
-    if (!form.password) {
-      newErrors.password = 'Le mot de passe est obligatoire';
-    }
-    return newErrors;
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setServerError('');
-
-    const newErrors = validate();
-    setErrors(newErrors);
-    if (Object.keys(newErrors).length > 0) return; // formulaire invalide : on n'envoie rien
-
+  const onSubmit = async (data) => {
     try {
-      setLoading(true);
-      const res = await api.post('/auth/login', {
-        email: form.email.trim(),
-        password: form.password,
-      });
-
-      saveSession(res.data.token, res.data.user);
+      await login(data.email.trim(), data.password);
       navigate('/dashboard');
     } catch (err) {
-      setServerError(err.message);
-    } finally {
-      setLoading(false);
+      toast.error(err.message);
     }
   };
 
   return (
-    <div className="auth-page">
-      <div className="auth-card">
-        <h1>Agent Management System</h1>
-        <h2>Connexion</h2>
+    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 dark:bg-gray-900">
+      <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-8 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div className="mb-6 text-center">
+          <p className="text-sm font-semibold text-primary-600">Agent Management System</p>
+          <h1 className="mt-1 text-2xl font-bold text-gray-900 dark:text-gray-100">Connexion</h1>
+        </div>
 
-        {successMessage && <div className="alert alert-success">{successMessage}</div>}
-        {serverError && <div className="alert alert-error">{serverError}</div>}
-
-        <form onSubmit={handleSubmit} noValidate>
-          <div className="form-group">
-            <label htmlFor="email">Email</label>
-            <input
-              id="email"
-              type="email"
-              name="email"
-              value={form.email}
-              onChange={handleChange}
-              placeholder="exemple@email.com"
-            />
-            {errors.email && <span className="field-error">{errors.email}</span>}
+        {successMessage && (
+          <div className="mb-4 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-900/30 dark:text-green-400">
+            {successMessage}
           </div>
+        )}
 
-          <div className="form-group">
-            <label htmlFor="password">Mot de passe</label>
-            <input
-              id="password"
-              type="password"
-              name="password"
-              value={form.password}
-              onChange={handleChange}
-              placeholder="Votre mot de passe"
-            />
-            {errors.password && <span className="field-error">{errors.password}</span>}
-          </div>
-
-          <button type="submit" className="btn btn-primary" disabled={loading}>
-            {loading ? 'Connexion...' : 'Se connecter'}
-          </button>
+        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
+          <Input
+            id="email"
+            label="Email"
+            type="email"
+            icon={HiOutlineMail}
+            placeholder="exemple@email.com"
+            error={errors.email?.message}
+            {...register('email')}
+          />
+          <Input
+            id="password"
+            label="Mot de passe"
+            type="password"
+            placeholder="Votre mot de passe"
+            error={errors.password?.message}
+            {...register('password')}
+          />
+          <Button type="submit" loading={isSubmitting} className="mt-2 w-full">
+            Se connecter
+          </Button>
         </form>
 
-        <p className="auth-link">
-          Pas encore de compte ? <Link to="/register">S'inscrire</Link>
+        <p className="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">
+          Pas encore de compte ?{' '}
+          <Link to="/register" className="font-semibold text-primary-600 hover:underline">
+            S'inscrire
+          </Link>
         </p>
       </div>
     </div>

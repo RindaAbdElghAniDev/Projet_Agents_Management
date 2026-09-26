@@ -5,15 +5,16 @@ const {
   getAttendanceById,
   createAttendance,
   updateAttendance,
+  exportAttendance,
 } = require('../controllers/attendanceController');
 const { protect } = require('../middleware/authMiddleware');
 const { authorizeAdmin } = require('../middleware/roleMiddleware');
 
-// Lecture : tout utilisateur connecté (le controller filtre selon le rôle)
+router.get('/export', protect, authorizeAdmin, exportAttendance);
+
 router.get('/', protect, getAttendance);
 router.get('/:id', protect, getAttendanceById);
 
-// Écriture : Admin uniquement
 router.post('/', protect, authorizeAdmin, createAttendance);
 router.put('/:id', protect, authorizeAdmin, updateAttendance);
 

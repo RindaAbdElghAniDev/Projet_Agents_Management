@@ -1,11 +1,10 @@
 import { Navigate, Outlet } from 'react-router-dom';
-import { getStoredUser } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 const AdminRoute = () => {
-  const user = getStoredUser();
+  const { isAdmin } = useAuth();
 
-  // Pas admin : retour au Dashboard
-  if (user?.role !== 'ADMIN') {
+  if (!isAdmin) {
     return <Navigate to="/dashboard" replace />;
   }
 

@@ -1,14 +1,14 @@
 const Dashboard = require('../models/dashboardModel');
 const Agent = require('../models/agentModel');
 
+const ALLOWED_PERIODS = [7, 30, 90];
+
 const createError = (message, statusCode) => {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
 };
 
-// Transforme [{status, count}] en {STATUT_A: 0, STATUT_B: 3, ...}
-// pour que React n'ait jamais à gérer un statut manquant
 const toCountMap = (rows, keys) => {
   const map = {};
   keys.forEach((key) => { map[key] = 0; });
@@ -16,33 +16,64 @@ const toCountMap = (rows, keys) => {
   return map;
 };
 
-// GET /api/dashboard/admin
+// Taux de présence = (Présent + En retard) / (Présent + Absent + En retard), en %.
+// Les jours "En congé" sont exclus : ce ne sont pas des absences non justifiées.
+const computeAttendanceRate = (map) => {
+  const denominator = map.PRESENT + map.ABSENT + map.LATE;
+  if (denominator === 0) return null;
+  return Math.round(((map.PRESENT + map.LATE) / denominator) * 1000) / 10;
+};
+
+// GET /api/dashboard/admin?period=7|30|90
 const getAdminDashboard = async (req, res, next) => {
   try {
-    // Les 7 requêtes tournent en parallèle : le temps total = la plus lente d'entre elles
+    const period = ALLOWED_PERIODS.includes(Number(req.query.period)) ? Number(req.query.period) : 30;
+
     const [
       agentCounts,
       totalDepartments,
       todayAttendance,
       pendingLeaves,
       agentsByDepartment,
-      attendanceBreakdown,
+      currentBreakdown,
+      previousBreakdown,
       leavesEvolution,
+      leaveDecisionCounts,
     ] = await Promise.all([
       Dashboard.getAgentCounts(),
       Dashboard.getDepartmentCount(),
       Dashboard.getTodayAttendanceCounts(),
       Dashboard.getPendingLeavesCount(),
       Dashboard.getAgentsByDepartment(),
-      Dashboard.getAttendanceBreakdown(),
+      Dashboard.getAttendanceBreakdown(period),
+      Dashboard.getPreviousAttendanceBreakdown(period),
       Dashboard.getLeavesEvolution(),
+      Dashboard.getLeaveDecisionCounts(),
     ]);
 
     const todayMap = toCountMap(todayAttendance, ['PRESENT', 'ABSENT', 'LATE', 'LEAVE']);
-    const breakdownMap = toCountMap(attendanceBreakdown, ['PRESENT', 'ABSENT', 'LATE', 'LEAVE']);
+    const currentMap = toCountMap(currentBreakdown, ['PRESENT', 'ABSENT', 'LATE', 'LEAVE']);
+    const previousMap = toCountMap(previousBreakdown, ['PRESENT', 'ABSENT', 'LATE', 'LEAVE']);
+    const leaveMap = toCountMap(leaveDecisionCounts, ['APPROVED', 'REJECTED']);
+
+    const attendanceRate = computeAttendanceRate(currentMap);
+    const previousAttendanceRate = computeAttendanceRate(previousMap);
+    const attendanceRateTrend =
+      attendanceRate !== null && previousAttendanceRate !== null
+        ? Math.round((attendanceRate - previousAttendanceRate) * 10) / 10
+        : null;
+
+    const leaveDenominator = leaveMap.APPROVED + leaveMap.REJECTED;
+    const leaveApprovalRate =
+      leaveDenominator === 0 ? null : Math.round((leaveMap.APPROVED / leaveDenominator) * 1000) / 10;
+
+    const topDepartments = [...agentsByDepartment]
+      .sort((a, b) => b.agents_count - a.agents_count)
+      .slice(0, 5);
 
     res.json({
       success: true,
+      period,
       stats: {
         totalAgents: Number(agentCounts.total),
         activeAgents: Number(agentCounts.active) || 0,
@@ -51,10 +82,14 @@ const getAdminDashboard = async (req, res, next) => {
         presentToday: todayMap.PRESENT,
         absentToday: todayMap.ABSENT,
         pendingLeaves,
+        attendanceRate,
+        attendanceRateTrend,
+        leaveApprovalRate,
       },
       charts: {
         agentsByDepartment,
-        attendanceBreakdown: breakdownMap,
+        topDepartments,
+        attendanceBreakdown: currentMap,
         leavesEvolution,
       },
     });
@@ -71,14 +106,23 @@ const getAgentDashboard = async (req, res, next) => {
       throw createError("Aucune fiche agent n'est liée à votre compte", 403);
     }
 
-    const [attendanceRows, leaveRows, recentAttendance] = await Promise.all([
+    const [attendanceRows, previousAttendanceRows, leaveRows, recentAttendance] = await Promise.all([
       Dashboard.getOwnAttendanceStats(agent.id),
+      Dashboard.getOwnAttendanceStatsPreviousMonth(agent.id),
       Dashboard.getOwnLeavesStats(agent.id),
       Dashboard.getOwnRecentAttendance(agent.id),
     ]);
 
     const attendanceMap = toCountMap(attendanceRows, ['PRESENT', 'ABSENT', 'LATE', 'LEAVE']);
+    const previousMap = toCountMap(previousAttendanceRows, ['PRESENT', 'ABSENT', 'LATE', 'LEAVE']);
     const leaveMap = toCountMap(leaveRows, ['PENDING', 'APPROVED', 'REJECTED']);
+
+    const attendanceRate = computeAttendanceRate(attendanceMap);
+    const previousAttendanceRate = computeAttendanceRate(previousMap);
+    const attendanceRateTrend =
+      attendanceRate !== null && previousAttendanceRate !== null
+        ? Math.round((attendanceRate - previousAttendanceRate) * 10) / 10
+        : null;
 
     res.json({
       success: true,
@@ -89,6 +133,8 @@ const getAgentDashboard = async (req, res, next) => {
         pendingLeaves: leaveMap.PENDING,
         approvedLeaves: leaveMap.APPROVED,
         rejectedLeaves: leaveMap.REJECTED,
+        attendanceRate,
+        attendanceRateTrend,
       },
       recentAttendance,
     });
