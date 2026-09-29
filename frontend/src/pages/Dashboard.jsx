@@ -10,6 +10,7 @@ import Skeleton from '../components/ui/Skeleton';
 import KpiCard from '../components/ui/KpiCard';
 import ChartBox from '../components/ui/ChartBox';
 import Select from '../components/ui/Select';
+import AiInsightsCard from '../components/ui/AiInsightsCard';
 
 const PERIODS = [
   { value: 7, label: '7 derniers jours' },
@@ -106,6 +107,8 @@ const AdminDashboard = () => {
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <AiInsightsCard period={period} />
+
         <ChartBox
           type="bar"
           title="Agents par département"

@@ -53,14 +53,21 @@ const Login = () => {
             error={errors.email?.message}
             {...register('email')}
           />
-          <Input
-            id="password"
-            label="Mot de passe"
-            type="password"
-            placeholder="Votre mot de passe"
-            error={errors.password?.message}
-            {...register('password')}
-          />
+          <div>
+            <Input
+              id="password"
+              label="Mot de passe"
+              type="password"
+              placeholder="Votre mot de passe"
+              error={errors.password?.message}
+              {...register('password')}
+            />
+            <div className="mt-1.5 text-right">
+              <Link to="/forgot-password" className="text-xs font-medium text-primary-600 hover:underline">
+                Mot de passe oublié ?
+              </Link>
+            </div>
+          </div>
           <Button type="submit" loading={isSubmitting} className="mt-2 w-full">
             Se connecter
           </Button>

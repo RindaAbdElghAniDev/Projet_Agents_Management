@@ -106,3 +106,16 @@ export const passwordSchema = z
     message: 'Les mots de passe ne correspondent pas',
     path: ['confirmPassword'],
   });
+  export const forgotPasswordSchema = z.object({
+  email: z.string().trim().min(1, "L'email est obligatoire").email("Format d'email invalide"),
+});
+
+export const resetPasswordSchema = z.object({
+  email: z.string().email('Adresse email invalide.'),
+  code: z.string().length(6, 'Le code doit contenir 6 chiffres.'),
+  newPassword: z.string().min(6, 'Le mot de passe doit contenir au moins 6 caractères.'),
+  confirmPassword: z.string(),
+}).refine((data) => data.newPassword === data.confirmPassword, {
+  message: 'Les mots de passe ne correspondent pas.',
+  path: ['confirmPassword'],
+});

@@ -135,7 +135,21 @@ const getOwnRecentAttendance = async (agentId) => {
   );
   return rows;
 };
-
+// Taux de présence par département sur les `days` derniers jours (utilisé uniquement par l'IA)
+const getAttendanceRateByDepartment = async (days) => {
+  const [rows] = await pool.execute(
+    `SELECT d.name AS department_name,
+            SUM(att.status IN ('PRESENT', 'LATE')) AS present_like,
+            SUM(att.status IN ('PRESENT', 'ABSENT', 'LATE')) AS marked
+     FROM departments d
+     JOIN agents a ON a.department_id = d.id
+     LEFT JOIN attendance att
+       ON att.agent_id = a.id AND att.attendance_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+     GROUP BY d.id, d.name`,
+    [days - 1]
+  );
+  return rows;
+};
 module.exports = {
   getAgentCounts,
   getDepartmentCount,
@@ -150,4 +164,5 @@ module.exports = {
   getOwnAttendanceStatsPreviousMonth,
   getOwnLeavesStats,
   getOwnRecentAttendance,
+  getAttendanceRateByDepartment
 };

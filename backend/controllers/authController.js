@@ -1,20 +1,16 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const User = require('../models/userModel');
-const Agent = require('../models/agentModel');
-const Log = require('../models/logModel');
-
-const createError = (message, statusCode) => {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  return error;
-};
-
-const generateToken = (userId) => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
-};
+const { sendResetCodeEmail } = require('../config/email');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const RESET_CODE_TTL_MINUTES = 15;
+
+const generateToken = (user) =>
+  jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || '1d',
+  });
 
 // POST /api/auth/register
 const register = async (req, res, next) => {
@@ -22,37 +18,34 @@ const register = async (req, res, next) => {
     const body = req.body || {};
     const name = String(body.name || '').trim();
     const email = String(body.email || '').trim().toLowerCase();
-    const password = String(body.password || '');
-    const confirmPassword = String(body.confirmPassword || '');
+    const password = typeof body.password === 'string' ? body.password : '';
+    const confirmPassword =
+      typeof body.confirmPassword === 'string' ? body.confirmPassword : '';
 
-    if (!name || !email || !password || !confirmPassword) {
-      throw createError('Tous les champs sont obligatoires', 400);
+    if (name.length < 2) {
+      return res.status(400).json({ message: 'Le nom doit contenir au moins 2 caractères.' });
     }
     if (!EMAIL_REGEX.test(email)) {
-      throw createError("Format d'email invalide", 400);
+      return res.status(400).json({ message: 'Adresse email invalide.' });
     }
     if (password.length < 6) {
-      throw createError('Le mot de passe doit contenir au moins 6 caractères', 400);
+      return res.status(400).json({ message: 'Le mot de passe doit contenir au moins 6 caractères.' });
     }
     if (password !== confirmPassword) {
-      throw createError('Les mots de passe ne correspondent pas', 400);
+      return res.status(400).json({ message: 'Les mots de passe ne correspondent pas.' });
     }
 
     const existingUser = await User.findByEmail(email);
     if (existingUser) {
-      throw createError('Cet email est déjà utilisé', 409);
+      return res.status(409).json({ message: 'Cet email est déjà utilisé.' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const userId = await User.create({ name, email, password: hashedPassword });
+    // Le rôle par défaut est AGENT : seul un admin existant pourra créer un autre admin plus tard
+    const userId = await User.create({ name, email, password: hashedPassword, role: 'AGENT' });
+    const user = await User.findById(userId);
 
-    await Agent.linkUserByEmail(userId, email);
-
-    res.status(201).json({
-      success: true,
-      message: 'Compte créé avec succès',
-      user: { id: userId, name, email, role: 'AGENT' },
-    });
+    res.status(201).json({ message: 'Compte créé avec succès.', user });
   } catch (error) {
     next(error);
   }
@@ -63,115 +56,125 @@ const login = async (req, res, next) => {
   try {
     const body = req.body || {};
     const email = String(body.email || '').trim().toLowerCase();
-    const password = String(body.password || '');
+    const password = typeof body.password === 'string' ? body.password : '';
 
     if (!email || !password) {
-      throw createError('Email et mot de passe obligatoires', 400);
+      return res.status(400).json({ message: 'Email et mot de passe obligatoires.' });
     }
 
     const user = await User.findByEmail(email);
-    const isMatch = user ? await bcrypt.compare(password, user.password) : false;
-    if (!isMatch) {
-      throw createError('Email ou mot de passe incorrect', 401);
+    const invalidMessage = 'Email ou mot de passe incorrect.';
+
+    if (!user) {
+      return res.status(401).json({ message: invalidMessage });
     }
 
-    const token = generateToken(user.id);
+    const passwordMatches = await bcrypt.compare(password, user.password);
+    if (!passwordMatches) {
+      return res.status(401).json({ message: invalidMessage });
+    }
 
-    await Log.create(user.id, 'LOGIN', `${user.name} s'est connecté`);
+    const token = generateToken(user);
 
     res.json({
-      success: true,
-      message: 'Connexion réussie',
+      message: 'Connexion réussie.',
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
     });
   } catch (error) {
     next(error);
   }
 };
 
-// GET /api/auth/me
-const getMe = async (req, res, next) => {
-  try {
-    res.json({ success: true, user: req.user });
-  } catch (error) {
-    next(error);
-  }
+// GET /api/auth/me (protégé)
+const getMe = (req, res) => {
+  res.json({ user: req.user });
 };
 
-// POST /api/auth/logout
-const logout = async (req, res, next) => {
+// POST /api/auth/forgot-password
+const forgotPassword = async (req, res, next) => {
   try {
-    await Log.create(req.user.id, 'LOGOUT', `${req.user.name} s'est déconnecté`);
-    res.json({ success: true, message: 'Déconnexion enregistrée' });
-  } catch (error) {
-    next(error);
-  }
-};
+    const email = String(req.body?.email || '').trim().toLowerCase();
 
-// PUT /api/auth/profile
-const updateProfile = async (req, res, next) => {
-  try {
-    const body = req.body || {};
-    const name = String(body.name || '').trim();
-    const email = String(body.email || '').trim().toLowerCase();
-
-    if (!name) {
-      throw createError('Le nom est obligatoire', 400);
-    }
-    if (name.length > 100) {
-      throw createError('Le nom ne doit pas dépasser 100 caractères', 400);
-    }
     if (!EMAIL_REGEX.test(email)) {
-      throw createError("Format d'email invalide", 400);
+      return res.status(400).json({ message: 'Adresse email invalide.' });
     }
 
-    // L'email ne doit pas appartenir à un AUTRE compte
-    const existing = await User.findByEmail(email);
-    if (existing && existing.id !== req.user.id) {
-      throw createError('Cet email est déjà utilisé par un autre compte', 409);
+    const user = await User.findByEmail(email);
+
+    // Même réponse que l'email existe ou non : on ne révèle pas quels emails sont enregistrés
+    const genericMessage = 'Si cet email existe, un code de vérification a été envoyé.';
+
+    if (!user) {
+      return res.json({ message: genericMessage });
     }
 
-    await User.updateProfile(req.user.id, { name, email });
-    const user = await User.findById(req.user.id);
+    // Code à 6 chiffres, ex: "042917"
+    const code = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
+    const expiresAt = new Date(Date.now() + RESET_CODE_TTL_MINUTES * 60 * 1000);
 
-    await Log.create(req.user.id, 'UPDATE_PROFILE', `${user.name} a modifié son profil`);
+    await User.setResetCode(email, code, expiresAt);
+    await sendResetCodeEmail(email, code);
 
-    res.json({ success: true, message: 'Profil mis à jour avec succès', user });
+    res.json({ message: genericMessage });
   } catch (error) {
     next(error);
   }
 };
 
-// PUT /api/auth/password
-const changePassword = async (req, res, next) => {
+// POST /api/auth/verify-reset-code
+const verifyResetCode = async (req, res, next) => {
   try {
-    const body = req.body || {};
-    const currentPassword = String(body.currentPassword || '');
-    const newPassword = String(body.newPassword || '');
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const code = String(req.body?.code || '').trim();
 
-    if (!currentPassword || !newPassword) {
-      throw createError('Tous les champs sont obligatoires', 400);
+    if (!email || !code) {
+      return res.status(400).json({ message: 'Email et code obligatoires.' });
+    }
+
+    const user = await User.findByValidResetCode(email, code);
+    if (!user) {
+      return res.status(400).json({ message: 'Code invalide ou expiré.' });
+    }
+
+    res.json({ message: 'Code valide.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/auth/reset-password
+const resetPassword = async (req, res, next) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const code = String(req.body?.code || '').trim();
+    const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+
+    if (!email || !code) {
+      return res.status(400).json({ message: 'Email et code obligatoires.' });
     }
     if (newPassword.length < 6) {
-      throw createError('Le nouveau mot de passe doit contenir au moins 6 caractères', 400);
+      return res.status(400).json({ message: 'Le mot de passe doit contenir au moins 6 caractères.' });
     }
 
-    const user = await User.findByIdWithPassword(req.user.id);
-    const isMatch = await bcrypt.compare(currentPassword, user.password);
-    if (!isMatch) {
-      throw createError('Mot de passe actuel incorrect', 401);
+    // On revérifie le code ici : ne jamais faire confiance à l'étape précédente seule
+    const user = await User.findByValidResetCode(email, code);
+    if (!user) {
+      return res.status(400).json({ message: 'Code invalide ou expiré.' });
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await User.updatePassword(req.user.id, hashedPassword);
+    await User.updatePasswordAndClearCode(user.id, hashedPassword);
 
-    await Log.create(req.user.id, 'CHANGE_PASSWORD', `${user.name} a changé son mot de passe`);
-
-    res.json({ success: true, message: 'Mot de passe modifié avec succès' });
+    res.json({ message: 'Mot de passe réinitialisé avec succès.' });
   } catch (error) {
     next(error);
   }
 };
 
-module.exports = { register, login, getMe, logout, updateProfile, changePassword };
+module.exports = { register, login, getMe, forgotPassword, verifyResetCode, resetPassword };

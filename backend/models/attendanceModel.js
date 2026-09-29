@@ -13,7 +13,7 @@ const SELECT_ATTENDANCE = `
 const buildWhere = ({ agentId, status, dateFrom, dateTo }) => {
   const conditions = [];
   const params = [];
-
+ 
   if (agentId) {
     conditions.push('att.agent_id = ?');
     params.push(agentId);

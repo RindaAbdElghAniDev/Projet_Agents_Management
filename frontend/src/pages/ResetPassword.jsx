@@ -1,35 +1,40 @@
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Link, useNavigate } from 'react-router-dom';
-import { HiOutlineUser, HiOutlineMail, HiOutlineLockClosed } from 'react-icons/hi';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { HiOutlineLockClosed, HiOutlineMail, HiOutlineKey } from 'react-icons/hi';
 import api from '../services/api';
-import { registerSchema } from '../lib/validators';
+import { resetPasswordSchema } from '../lib/validators';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
-import { useState } from 'react';
 
-const Register = () => {
+const ResetPassword = () => {
+  const location = useLocation();
   const navigate = useNavigate();
   const [serverError, setServerError] = useState('');
+
+  // Email pré-rempli s'il vient de ForgotPassword, sinon l'utilisateur le tape lui-même
+  const emailFromState = location.state?.email || '';
 
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm({ resolver: zodResolver(registerSchema) });
+  } = useForm({
+    resolver: zodResolver(resetPasswordSchema),
+    defaultValues: { email: emailFromState },
+  });
 
   const onSubmit = async (data) => {
     setServerError('');
     try {
-      await api.post('/auth/register', {
-        name: data.name.trim(),
-        email: data.email.trim(),
-        password: data.password,
-        confirmPassword: data.confirmPassword,
+      await api.post('/auth/reset-password', {
+        email: data.email.trim().toLowerCase(),
+        code: data.code.trim(),
+        newPassword: data.newPassword,
       });
-
       navigate('/login', {
-        state: { message: 'Compte créé avec succès. Vous pouvez vous connecter.' },
+        state: { message: 'Mot de passe réinitialisé avec succès. Vous pouvez vous connecter.' },
       });
     } catch (err) {
       setServerError(err.message);
@@ -41,7 +46,10 @@ const Register = () => {
       <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-8 shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <div className="mb-6 text-center">
           <p className="text-sm font-semibold text-primary-600">Agent Management System</p>
-          <h1 className="mt-1 text-2xl font-bold text-gray-900 dark:text-gray-100">Créer un compte</h1>
+          <h1 className="mt-1 text-2xl font-bold text-gray-900 dark:text-gray-100">Réinitialiser le mot de passe</h1>
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+            Entrez le code reçu par email et votre nouveau mot de passe.
+          </p>
         </div>
 
         {serverError && (
@@ -52,31 +60,32 @@ const Register = () => {
 
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
           <Input
-            id="name"
-            label="Nom"
-            type="text"
-            icon={HiOutlineUser}
-            placeholder="Votre nom"
-            error={errors.name?.message}
-            {...register('name')}
-          />
-          <Input
             id="email"
             label="Email"
             type="email"
             icon={HiOutlineMail}
-            placeholder="exemple@email.com"
+            placeholder="exemple@gmail.com"
             error={errors.email?.message}
             {...register('email')}
           />
           <Input
-            id="password"
-            label="Mot de passe"
+            id="code"
+            label="Code de vérification"
+            type="text"
+            icon={HiOutlineKey}
+            placeholder="6 chiffres"
+            maxLength={6}
+            error={errors.code?.message}
+            {...register('code')}
+          />
+          <Input
+            id="newPassword"
+            label="Nouveau mot de passe"
             type="password"
             icon={HiOutlineLockClosed}
             placeholder="6 caractères minimum"
-            error={errors.password?.message}
-            {...register('password')}
+            error={errors.newPassword?.message}
+            {...register('newPassword')}
           />
           <Input
             id="confirmPassword"
@@ -87,16 +96,14 @@ const Register = () => {
             error={errors.confirmPassword?.message}
             {...register('confirmPassword')}
           />
-
           <Button type="submit" loading={isSubmitting} className="mt-2 w-full">
-            S'inscrire
+            Réinitialiser le mot de passe
           </Button>
         </form>
 
         <p className="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">
-          Déjà un compte ?{' '}
           <Link to="/login" className="font-semibold text-primary-600 hover:underline">
-            Se connecter
+            Retour à la connexion
           </Link>
         </p>
       </div>
@@ -104,4 +111,4 @@ const Register = () => {
   );
 };
 
-export default Register;
+export default ResetPassword;
