@@ -55,6 +55,7 @@ const AgentDetails = () => {
         ['Département', agent.department_name],
         ['Poste', agent.position],
         ['Salaire', Number(agent.salary).toLocaleString('fr-FR', { minimumFractionDigits: 2 })],
+        ['Solde de congés annuel', `${agent.annual_leave_balance} jour(s)`],
       ]
     : [];
 

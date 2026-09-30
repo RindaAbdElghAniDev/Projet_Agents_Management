@@ -6,7 +6,7 @@ import { HiOutlinePlus, HiOutlineCalendar, HiOutlineCheck, HiOutlineX } from 're
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { leaveSchema } from '../lib/validators';
-import { LEAVE_STATUS_LABELS, LEAVE_STATUS_COLORS } from '../lib/constants';
+import { LEAVE_STATUS_LABELS, LEAVE_STATUS_COLORS, LEAVE_TYPE_LABELS, LEAVE_TYPE_COLORS } from '../lib/constants';
 import { getToday } from '../lib/date';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -25,8 +25,10 @@ const Leaves = () => {
   const [agents, setAgents] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [loading, setLoading] = useState(true);
-
-  const emptyFilters = isAdmin ? { agent_id: '', status: '' } : { status: '' };
+  const [balance, setBalance] = useState(null);
+  const emptyFilters = isAdmin
+    ? { agent_id: '', status: '', leave_type: '' }
+    : { status: '', leave_type: '' };
   const [filters, setFilters] = useState(emptyFilters);
   const [appliedFilters, setAppliedFilters] = useState(emptyFilters);
   const [page, setPage] = useState(1);
@@ -74,6 +76,18 @@ const Leaves = () => {
     };
     fetchAgents();
   }, [isAdmin]);
+  useEffect(() => {
+    if (isAdmin) return;
+    const fetchBalance = async () => {
+      try {
+        const res = await api.get('/leaves/my-balance');
+        setBalance(res.data.balance);
+      } catch {
+        // affichage de confort : une erreur ici ne doit pas bloquer la page
+      }
+    };
+    fetchBalance();
+  }, [isAdmin]);
 
   useEffect(() => {
     fetchLeaves();
@@ -95,7 +109,7 @@ const Leaves = () => {
   };
 
   const openForm = () => {
-    reset({ start_date: '', end_date: '', reason: '' });
+    reset({ leave_type: 'PAID', start_date: '', end_date: '', reason: '' });
     setShowForm(true);
   };
 
@@ -127,7 +141,7 @@ const Leaves = () => {
     }
   };
 
-  const columnCount = isAdmin ? 7 : 3;
+  const columnCount = isAdmin ? 8 : 4;
   const hasActiveFilters = Object.values(appliedFilters).some(Boolean);
 
   return (
@@ -139,12 +153,25 @@ const Leaves = () => {
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">{pagination.total} demande(s)</p>
         </div>
-        {!isAdmin && <Button icon={HiOutlinePlus} onClick={openForm}>Nouvelle demande</Button>}
+              {!isAdmin && (
+          <div className="flex items-center gap-3">
+            {balance !== null && (
+              <Badge color={balance > 0 ? 'blue' : 'red'}>Solde restant : {balance} jour(s)</Badge>
+            )}
+            <Button icon={HiOutlinePlus} onClick={openForm}>Nouvelle demande</Button>
+          </div>
+        )}
       </div>
 
       {showForm && !isAdmin && (
         <Card>
           <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-1 gap-4 sm:grid-cols-2" noValidate>
+            <Select label="Type de congé" error={errors.leave_type?.message} {...register('leave_type')}>
+              {Object.entries(LEAVE_TYPE_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </Select>
+            <div />
             <Input label="Date de début" type="date" min={getToday()} error={errors.start_date?.message} {...register('start_date')} />
             <Input label="Date de fin" type="date" min={getToday()} error={errors.end_date?.message} {...register('end_date')} />
             <Input label="Motif" className="sm:col-span-2" error={errors.reason?.message} {...register('reason')} />
@@ -159,7 +186,7 @@ const Leaves = () => {
       <Card>
         <form
           onSubmit={handleSearch}
-          className={`mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 ${isAdmin ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}
+          className={`mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 ${isAdmin ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}
         >
           {isAdmin && (
             <Select name="agent_id" value={filters.agent_id} onChange={handleFilterChange}>
@@ -169,6 +196,12 @@ const Leaves = () => {
               ))}
             </Select>
           )}
+          <Select name="leave_type" value={filters.leave_type} onChange={handleFilterChange}>
+            <option value="">Tous les types</option>
+            {Object.entries(LEAVE_TYPE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </Select>
           <Select name="status" value={filters.status} onChange={handleFilterChange}>
             <option value="">Tous les statuts</option>
             {Object.entries(LEAVE_STATUS_LABELS).map(([value, label]) => (
@@ -189,6 +222,7 @@ const Leaves = () => {
                 {isAdmin && <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Département</th>}
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Du</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Au</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Type</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Motif</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Statut</th>
                 {isAdmin && <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Actions</th>}
@@ -220,6 +254,9 @@ const Leaves = () => {
                     {isAdmin && <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{leave.department_name}</td>}
                     <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{leave.start_date}</td>
                     <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{leave.end_date}</td>
+                    <td className="px-4 py-3">
+                      <Badge color={LEAVE_TYPE_COLORS[leave.leave_type]}>{LEAVE_TYPE_LABELS[leave.leave_type]}</Badge>
+                    </td>
                     <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{leave.reason}</td>
                     <td className="px-4 py-3">
                       <Badge color={LEAVE_STATUS_COLORS[leave.status]}>{LEAVE_STATUS_LABELS[leave.status]}</Badge>

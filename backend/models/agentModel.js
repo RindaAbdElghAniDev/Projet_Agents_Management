@@ -1,14 +1,11 @@
 const pool = require('../config/db');
 
-// Requête de base : chaque agent avec le nom de son département (JOIN)
 const SELECT_AGENTS = `
   SELECT a.*, d.name AS department_name
   FROM agents a
   JOIN departments d ON a.department_id = d.id
 `;
 
-// Colonnes autorisées pour le tri : la clé vient du client, la valeur est le SQL réel.
-// Cette liste blanche évite d'injecter un nom de colonne arbitraire dans la requête.
 const SORT_COLUMNS = {
   name: 'a.last_name',
   email: 'a.email',
@@ -26,7 +23,6 @@ const buildOrderBy = (sortBy, sortOrder) => {
   return `ORDER BY ${column} ${order}`;
 };
 
-// Construit le WHERE selon les filtres reçus.
 const buildWhere = ({ search, departmentId, status, position }) => {
   const conditions = [];
   const params = [];
@@ -53,7 +49,6 @@ const buildWhere = ({ search, departmentId, status, position }) => {
   return { where, params };
 };
 
-// Liste paginée + total
 const findAll = async (filters, limit, offset, sort = {}) => {
   const { where, params } = buildWhere(filters);
   const orderBy = buildOrderBy(sort.sortBy, sort.sortOrder);
@@ -71,34 +66,31 @@ const findAll = async (filters, limit, offset, sort = {}) => {
   return { agents, total: countRows[0].total };
 };
 
-// Un agent par id (avec son département)
 const findById = async (id) => {
   const [rows] = await pool.execute(`${SELECT_AGENTS} WHERE a.id = ?`, [id]);
   return rows[0];
 };
 
-// Un agent par email (pour vérifier les doublons)
 const findByEmail = async (email) => {
   const [rows] = await pool.execute('SELECT id FROM agents WHERE email = ?', [email]);
   return rows[0];
 };
 
-// Fiche agent liée à un compte utilisateur (undefined si aucune)
+// Fiche agent liée à un compte utilisateur (undefined si aucune) — inclut le solde de congés
 const findByUserId = async (userId) => {
   const [rows] = await pool.execute(
-    'SELECT id, first_name, last_name, status FROM agents WHERE user_id = ?',
+    'SELECT id, first_name, last_name, status, annual_leave_balance FROM agents WHERE user_id = ?',
     [userId]
   );
   return rows[0];
 };
 
-// Créer un agent, retourne son id
 const create = async (data) => {
   const [result] = await pool.execute(
     `INSERT INTO agents
       (user_id, department_id, first_name, last_name, email, phone, address,
-       birth_date, hire_date, position, salary, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       birth_date, hire_date, position, salary, status, annual_leave_balance)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       data.user_id,
       data.department_id,
@@ -112,17 +104,18 @@ const create = async (data) => {
       data.position,
       data.salary,
       data.status,
+      data.annual_leave_balance,
     ]
   );
   return result.insertId;
 };
 
-// Modifier un agent
 const update = async (id, data) => {
   const [result] = await pool.execute(
     `UPDATE agents SET
        department_id = ?, first_name = ?, last_name = ?, email = ?, phone = ?,
-       address = ?, birth_date = ?, hire_date = ?, position = ?, salary = ?, status = ?
+       address = ?, birth_date = ?, hire_date = ?, position = ?, salary = ?, status = ?,
+       annual_leave_balance = ?
      WHERE id = ?`,
     [
       data.department_id,
@@ -136,25 +129,33 @@ const update = async (id, data) => {
       data.position,
       data.salary,
       data.status,
+      data.annual_leave_balance,
       id,
     ]
   );
   return result.affectedRows;
 };
 
-// Supprimer un agent
 const remove = async (id) => {
   const [result] = await pool.execute('DELETE FROM agents WHERE id = ?', [id]);
   return result.affectedRows;
 };
 
-// Relie un compte utilisateur à la fiche agent ayant le même email (si pas déjà reliée)
 const linkUserByEmail = async (userId, email) => {
   await pool.execute(
     'UPDATE agents SET user_id = ? WHERE email = ? AND user_id IS NULL',
     [userId, email]
   );
 };
+
+// Ajuste le solde de congés d'un agent (delta négatif pour décompter, positif pour créditer)
+const adjustBalance = async (id, delta) => {
+  await pool.execute(
+    'UPDATE agents SET annual_leave_balance = annual_leave_balance + ? WHERE id = ?',
+    [delta, id]
+  );
+};
+
 // Liste complète (sans pagination), pour l'export CSV. Plafonnée à 5000 lignes par sécurité.
 const findAllForExport = async (filters) => {
   const { where, params } = buildWhere(filters);
@@ -162,15 +163,17 @@ const findAllForExport = async (filters) => {
   const [agents] = await pool.query(`${SELECT_AGENTS} ${where} ${orderBy} LIMIT 5000`, params);
   return agents;
 };
+
 module.exports = {
   findAll,
   findById,
-  findAllForExport,
   findByEmail,
   findByUserId,
   create,
   update,
   remove,
   linkUserByEmail,
+  adjustBalance,
+  findAllForExport,
   SORT_FIELDS,
 };

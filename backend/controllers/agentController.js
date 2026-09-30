@@ -3,6 +3,7 @@ const Department = require('../models/departmentModel');
 const User = require('../models/userModel');
 const Log = require('../models/logModel');
 const { toCSV } = require('../utils/csv');
+
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^[0-9+\s().-]{6,30}$/;
 const STATUSES = ['ACTIVE', 'INACTIVE'];
@@ -37,6 +38,10 @@ const cleanAgentData = (body = {}) => {
     position: String(body.position || '').trim(),
     salary: body.salary === '' || body.salary == null ? NaN : Number(body.salary),
     status: String(body.status || 'ACTIVE').trim().toUpperCase(),
+    annual_leave_balance:
+      body.annual_leave_balance === '' || body.annual_leave_balance == null
+        ? 18
+        : Number(body.annual_leave_balance),
   };
 
   if (!data.first_name || !data.last_name) {
@@ -77,6 +82,13 @@ const cleanAgentData = (body = {}) => {
   if (!STATUSES.includes(data.status)) {
     throw createError('Statut invalide (ACTIVE ou INACTIVE)', 400);
   }
+  if (
+    !Number.isFinite(data.annual_leave_balance) ||
+    data.annual_leave_balance < 0 ||
+    data.annual_leave_balance > 365
+  ) {
+    throw createError('Le solde de congés doit être un nombre entre 0 et 365', 400);
+  }
 
   return data;
 };
@@ -93,7 +105,6 @@ const getAgents = async (req, res, next) => {
       throw createError('Statut invalide (ACTIVE ou INACTIVE)', 400);
     }
 
-    // Tri : la colonne doit appartenir à la liste blanche exportée par le model
     const sortBy = req.query.sort_by ? String(req.query.sort_by) : 'name';
     if (!Agent.SORT_FIELDS.includes(sortBy)) {
       throw createError('Colonne de tri invalide', 400);
@@ -220,6 +231,7 @@ const deleteAgent = async (req, res, next) => {
     next(error);
   }
 };
+
 // GET /api/agents/export?search=&department_id=&status=&position=
 const exportAgents = async (req, res, next) => {
   try {
@@ -247,6 +259,7 @@ const exportAgents = async (req, res, next) => {
       { key: 'salary', label: 'Salaire' },
       { key: 'status', label: 'Statut' },
       { key: 'hire_date', label: "Date d'embauche" },
+      { key: 'annual_leave_balance', label: 'Solde congés (jours)' },
     ]);
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -256,11 +269,5 @@ const exportAgents = async (req, res, next) => {
     next(error);
   }
 };
-module.exports = {
-  getAgents,
-  getAgentById,
-  createAgent,
-  updateAgent,
-  deleteAgent,
-  exportAgents
-};
+
+module.exports = { getAgents, getAgentById, createAgent, updateAgent, deleteAgent, exportAgents };

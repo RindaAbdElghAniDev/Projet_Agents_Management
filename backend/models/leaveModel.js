@@ -2,7 +2,7 @@ const pool = require('../config/db');
 
 // Chaque demande avec le nom de l'agent, son département et le nom du réviseur
 const SELECT_LEAVES = `
-  SELECT l.id, l.agent_id, l.start_date, l.end_date, l.reason, l.status,
+  SELECT l.id, l.agent_id, l.leave_type, l.start_date, l.end_date, l.reason, l.status,
          l.reviewed_by, l.created_at,
          a.first_name, a.last_name, d.name AS department_name,
          u.name AS reviewed_by_name
@@ -13,7 +13,7 @@ const SELECT_LEAVES = `
 `;
 
 // WHERE dynamique : le SQL est fixe, les valeurs passent par params (?)
-const buildWhere = ({ agentId, status }) => {
+const buildWhere = ({ agentId, status, leaveType }) => {
   const conditions = [];
   const params = [];
 
@@ -24,6 +24,10 @@ const buildWhere = ({ agentId, status }) => {
   if (status) {
     conditions.push('l.status = ?');
     params.push(status);
+  }
+  if (leaveType) {
+    conditions.push('l.leave_type = ?');
+    params.push(leaveType);
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -55,7 +59,7 @@ const findById = async (id) => {
   return rows[0];
 };
 
-// Chevauchement de dates pour un agent (ex : demande déjà en attente ou approuvée sur ces dates)
+// Chevauchement de dates pour un agent (peu importe le type : on ne peut pas être sur deux congés en même temps)
 const findOverlap = async (agentId, startDate, endDate) => {
   const [rows] = await pool.execute(
     `SELECT id FROM leaves
@@ -68,11 +72,11 @@ const findOverlap = async (agentId, startDate, endDate) => {
 };
 
 // Créer une demande, retourne son id
-const create = async ({ agent_id, start_date, end_date, reason }) => {
+const create = async ({ agent_id, leave_type, start_date, end_date, reason }) => {
   const [result] = await pool.execute(
-    `INSERT INTO leaves (agent_id, start_date, end_date, reason, status)
-     VALUES (?, ?, ?, ?, 'PENDING')`,
-    [agent_id, start_date, end_date, reason]
+    `INSERT INTO leaves (agent_id, leave_type, start_date, end_date, reason, status)
+     VALUES (?, ?, ?, ?, ?, 'PENDING')`,
+    [agent_id, leave_type, start_date, end_date, reason]
   );
   return result.insertId;
 };

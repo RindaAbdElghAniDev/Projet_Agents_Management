@@ -32,8 +32,11 @@ export const agentSchema = z.object({
     .number({ invalid_type_error: 'Le salaire doit être un nombre' })
     .min(0, 'Le salaire doit être positif'),
   status: z.enum(['ACTIVE', 'INACTIVE']),
+  annual_leave_balance: z.coerce
+    .number({ invalid_type_error: 'Le solde doit être un nombre' })
+    .min(0, 'Le solde doit être positif')
+    .max(365, '365 jours maximum'),
 });
-
 export const departmentSchema = z.object({
   name: z.string().trim().min(1, 'Le nom est obligatoire').max(100, '100 caractères maximum'),
   description: z.string().trim().max(255, '255 caractères maximum').optional(),
@@ -76,9 +79,11 @@ export const attendanceCreateSchema = attendanceBase
       .refine((v) => v <= getToday(), { message: 'La date ne peut pas être dans le futur' }),
   })
   .superRefine(attendanceTimesCheck);
-
 export const leaveSchema = z
   .object({
+    leave_type: z.enum(['PAID', 'SICK', 'MATERNITY_PATERNITY', 'UNPAID'], {
+      errorMap: () => ({ message: 'Le type de congé est obligatoire' }),
+    }),
     start_date: z.string().min(1, 'La date de début est obligatoire'),
     end_date: z.string().min(1, 'La date de fin est obligatoire'),
     reason: z.string().trim().min(1, 'Le motif est obligatoire').max(255, '255 caractères maximum'),

@@ -127,16 +127,17 @@ const Agents = () => {
     }
   };
 
-  const openAdd = () => {
+   const openAdd = () => {
     setEditingAgent(null);
     reset({
       first_name: '', last_name: '', email: '', phone: '', address: '',
       birth_date: '', hire_date: '', department_id: '', position: '', salary: '', status: 'ACTIVE',
+      annual_leave_balance: '18',
     });
     setModalOpen(true);
   };
 
-  const openEdit = (agent) => {
+    const openEdit = (agent) => {
     setEditingAgent(agent);
     reset({
       first_name: agent.first_name,
@@ -150,10 +151,10 @@ const Agents = () => {
       position: agent.position,
       salary: String(agent.salary),
       status: agent.status,
+      annual_leave_balance: String(agent.annual_leave_balance),
     });
     setModalOpen(true);
   };
-
   const onSubmit = async (data) => {
     try {
       setSaving(true);
@@ -353,6 +354,12 @@ const Agents = () => {
           </Select>
           <Input label="Poste" error={errors.position?.message} {...register('position')} />
           <Input label="Salaire" type="number" step="0.01" error={errors.salary?.message} {...register('salary')} />
+            <Input
+            label="Solde de congés annuel (jours)"
+            type="number"
+            error={errors.annual_leave_balance?.message}
+            {...register('annual_leave_balance')}
+          />
           <Select label="Statut" error={errors.status?.message} {...register('status')}>
             <option value="ACTIVE">Actif</option>
             <option value="INACTIVE">Inactif</option>

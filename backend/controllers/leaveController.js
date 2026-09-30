@@ -1,7 +1,9 @@
 const Leave = require('../models/leaveModel');
 const Agent = require('../models/agentModel');
 const Log = require('../models/logModel');
+
 const STATUSES = ['PENDING', 'APPROVED', 'REJECTED'];
+const LEAVE_TYPES = ['PAID', 'SICK', 'MATERNITY_PATERNITY', 'UNPAID'];
 
 const createError = (message, statusCode) => {
   const error = new Error(message);
@@ -20,14 +22,20 @@ const parseId = (value) => {
 const isValidDate = (value) =>
   /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
 
-// Date du jour au format AAAA-MM-JJ (heure du serveur)
 const getToday = () => {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
 
-// Fiche agent de l'utilisateur connecté (pour les comptes AGENT)
+// Nombre de jours calendaires couverts par un congé (dates de début et de fin incluses)
+const countLeaveDays = (startDate, endDate) => {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const diffMs = end.getTime() - start.getTime();
+  return Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1;
+};
+
 const getOwnAgent = async (user) => {
   const agent = await Agent.findByUserId(user.id);
   if (!agent) {
@@ -36,7 +44,17 @@ const getOwnAgent = async (user) => {
   return agent;
 };
 
-// GET /api/leaves?agent_id=&status=&page=&limit=
+// GET /api/leaves/my-balance (Agent)
+const getMyBalance = async (req, res, next) => {
+  try {
+    const ownAgent = await getOwnAgent(req.user);
+    res.json({ success: true, balance: ownAgent.annual_leave_balance });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/leaves?agent_id=&status=&leave_type=&page=&limit=
 const getLeaves = async (req, res, next) => {
   try {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -48,17 +66,20 @@ const getLeaves = async (req, res, next) => {
       throw createError('Statut invalide (PENDING, APPROVED ou REJECTED)', 400);
     }
 
-    // Qui peut voir quoi ?
+    const leaveType = req.query.leave_type ? String(req.query.leave_type).toUpperCase() : '';
+    if (leaveType && !LEAVE_TYPES.includes(leaveType)) {
+      throw createError('Type de congé invalide', 400);
+    }
+
     let agentId;
     if (req.user.role === 'ADMIN') {
-      agentId = parseInt(req.query.agent_id, 10) || null; // filtre optionnel
+      agentId = parseInt(req.query.agent_id, 10) || null;
     } else {
-      // Un AGENT ne voit que SES demandes, quoi qu'il envoie dans l'URL
       const ownAgent = await getOwnAgent(req.user);
       agentId = ownAgent.id;
     }
 
-    const { records, total } = await Leave.findAll({ agentId, status }, limit, offset);
+    const { records, total } = await Leave.findAll({ agentId, status, leaveType }, limit, offset);
 
     res.json({
       success: true,
@@ -80,7 +101,6 @@ const getLeaveById = async (req, res, next) => {
       throw createError('Demande introuvable', 404);
     }
 
-    // Un AGENT ne peut lire que sa propre demande
     if (req.user.role !== 'ADMIN') {
       const ownAgent = await getOwnAgent(req.user);
       if (leave.agent_id !== ownAgent.id) {
@@ -103,10 +123,14 @@ const createLeave = async (req, res, next) => {
     const ownAgent = await getOwnAgent(req.user);
 
     const body = req.body || {};
+    const leaveType = String(body.leave_type || '').trim().toUpperCase();
     const startDate = String(body.start_date || '').trim();
     const endDate = String(body.end_date || '').trim();
     const reason = String(body.reason || '').trim();
 
+    if (!LEAVE_TYPES.includes(leaveType)) {
+      throw createError('Type de congé invalide', 400);
+    }
     if (!isValidDate(startDate) || !isValidDate(endDate)) {
       throw createError('Dates invalides (AAAA-MM-JJ)', 400);
     }
@@ -123,25 +147,36 @@ const createLeave = async (req, res, next) => {
       throw createError('Le motif ne doit pas dépasser 255 caractères', 400);
     }
 
+    // Un congé PAYÉ ne peut pas dépasser le solde restant de l'agent
+    if (leaveType === 'PAID') {
+      const requestedDays = countLeaveDays(startDate, endDate);
+      if (requestedDays > ownAgent.annual_leave_balance) {
+        throw createError(
+          `Solde insuffisant : il vous reste ${ownAgent.annual_leave_balance} jour(s), cette demande en compte ${requestedDays}`,
+          400
+        );
+      }
+    }
+
     if (await Leave.findOverlap(ownAgent.id, startDate, endDate)) {
-      throw createError(
-        'Une demande en attente ou approuvée existe déjà sur cette période',
-        409
-      );
+      throw createError('Une demande en attente ou approuvée existe déjà sur cette période', 409);
     }
 
     const id = await Leave.create({
       agent_id: ownAgent.id,
+      leave_type: leaveType,
       start_date: startDate,
       end_date: endDate,
       reason,
     });
     const leave = await Leave.findById(id);
+
     await Log.create(
       req.user.id,
       'CREATE_LEAVE',
       `${req.user.name} a demandé un congé du ${startDate} au ${endDate}`
     );
+
     res.status(201).json({
       success: true,
       message: 'Demande de congé envoyée avec succès',
@@ -170,13 +205,28 @@ const reviewLeave = async (req, res, next) => {
       throw createError('Cette demande a déjà été traitée', 409);
     }
 
+    // Un congé PAYÉ décompte le solde annuel de l'agent, uniquement au moment de l'approbation
+    if (status === 'APPROVED' && leave.leave_type === 'PAID') {
+      const agent = await Agent.findById(leave.agent_id);
+      const days = countLeaveDays(leave.start_date, leave.end_date);
+      if (days > agent.annual_leave_balance) {
+        throw createError(
+          `Solde insuffisant pour approuver cette demande (${agent.annual_leave_balance} jour(s) restant(s), demande de ${days} jour(s))`,
+          409
+        );
+      }
+      await Agent.adjustBalance(leave.agent_id, -days);
+    }
+
     await Leave.review(id, status, req.user.id);
     const updated = await Leave.findById(id);
+
     await Log.create(
       req.user.id,
       status === 'APPROVED' ? 'APPROVE_LEAVE' : 'REJECT_LEAVE',
       `${req.user.name} a ${status === 'APPROVED' ? 'approuvé' : 'rejeté'} le congé de ${leave.first_name} ${leave.last_name}`
     );
+
     res.json({
       success: true,
       message: status === 'APPROVED' ? 'Demande approuvée' : 'Demande rejetée',
@@ -187,4 +237,4 @@ const reviewLeave = async (req, res, next) => {
   }
 };
 
-module.exports = { getLeaves, getLeaveById, createLeave, reviewLeave };
+module.exports = { getLeaves, getLeaveById, createLeave, reviewLeave, getMyBalance };

@@ -40,3 +40,16 @@ export const LOG_ACTION_LABELS = {
     UPDATE_PROFILE: 'Modification profil',
   CHANGE_PASSWORD: 'Changement mot de passe',
 };
+export const LEAVE_TYPE_LABELS = {
+  PAID: 'Congé payé',
+  SICK: 'Congé maladie',
+  MATERNITY_PATERNITY: 'Congé maternité/paternité',
+  UNPAID: 'Congé sans solde',
+};
+
+export const LEAVE_TYPE_COLORS = {
+  PAID: 'blue',
+  SICK: 'red',
+  MATERNITY_PATERNITY: 'purple',
+  UNPAID: 'gray',
+};
