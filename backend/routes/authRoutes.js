@@ -3,6 +3,7 @@ const {
   register,
   login,
   getMe,
+  logout,
   forgotPassword,
   verifyResetCode,
   resetPassword,
@@ -15,6 +16,7 @@ const router = express.Router();
 router.post('/register', register);
 router.post('/login', login);
 router.get('/me', protect, getMe);
+router.post('/logout', protect, logout);
 
 router.post('/forgot-password', forgotPasswordLimiter, forgotPassword);
 router.post('/verify-reset-code', verifyCodeLimiter, verifyResetCode);

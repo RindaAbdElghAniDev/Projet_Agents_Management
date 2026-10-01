@@ -16,6 +16,14 @@ const errorHandler = (err, req, res, next) => {
     return res.status(409).json({ message: 'Cette valeur existe déjà.' });
   }
 
+  // Erreurs métier signalées par les contrôleurs via createError(message, statusCode)
+  // (ex. 400, 403, 404, 409, 422, 502, 503) : on renvoie le statut prévu
+  // au lieu de tout retomber en 500. Le message vient du code applicatif, il est donc diffusable.
+  if (Number.isInteger(err.statusCode) && err.statusCode >= 400 && err.statusCode <= 599) {
+    return res.status(err.statusCode).json({ message: err.message });
+  }
+
+  // Aucune information exploitable : on masque le détail technique (pas de fuite d'internals).
   res.status(500).json({ message: 'Erreur interne du serveur.' });
 };
 

@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const User = require('../models/userModel');
+const Log = require('../models/logModel');
 const { sendResetCodeEmail } = require('../config/email');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -96,6 +97,18 @@ const getMe = (req, res) => {
   res.json({ user: req.user });
 };
 
+// POST /api/auth/logout (protégé)
+// Le JWT est sans état : cette route trace la déconnexion dans les logs.
+// La suppression du token reste faite côté client (clearSession).
+const logout = async (req, res, next) => {
+  try {
+    await Log.create(req.user.id, 'LOGOUT', `${req.user.name} s'est déconnecté`);
+    res.json({ message: 'Déconnexion réussie.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // POST /api/auth/forgot-password
 const forgotPassword = async (req, res, next) => {
   try {
@@ -177,4 +190,4 @@ const resetPassword = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, getMe, forgotPassword, verifyResetCode, resetPassword };
+module.exports = { register, login, getMe, logout, forgotPassword, verifyResetCode, resetPassword };
