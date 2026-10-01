@@ -202,6 +202,16 @@ const updateAttendance = async (req, res, next) => {
       throw createError('Présence introuvable', 404);
     }
 
+    // Même règle que POST /api/attendance, mais uniquement sur les dates du jour ou futures :
+    // l'historique d'un agent devenu inactif reste corrigeable (paie, erreur de saisie).
+    const agent = await Agent.findById(existing.agent_id);
+    if (!agent) {
+      throw createError('Agent introuvable', 400);
+    }
+    if (agent.status !== 'ACTIVE' && existing.attendance_date >= getToday()) {
+      throw createError("Impossible d'enregistrer la présence d'un agent inactif", 400);
+    }
+
     const details = cleanAttendanceDetails(req.body);
 
     await Attendance.update(id, details);
