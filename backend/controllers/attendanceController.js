@@ -181,6 +181,12 @@ const createAttendance = async (req, res, next) => {
     });
     const record = await Attendance.findById(id);
 
+    await Log.create(
+      req.user.id,
+      'CREATE_ATTENDANCE',
+      `${req.user.name} a enregistré la présence de ${record.first_name} ${record.last_name} du ${record.attendance_date}`
+    );
+
     res.status(201).json({
       success: true,
       message: 'Présence enregistrée avec succès',

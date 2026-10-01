@@ -36,6 +36,7 @@ export const LOG_ACTION_LABELS = {
   CREATE_LEAVE: 'Demande de congé',
   APPROVE_LEAVE: 'Congé approuvé',
   REJECT_LEAVE: 'Congé rejeté',
+  CREATE_ATTENDANCE: 'Création présence',
   UPDATE_ATTENDANCE: 'Modification présence',
     UPDATE_PROFILE: 'Modification profil',
   CHANGE_PASSWORD: 'Changement mot de passe',
