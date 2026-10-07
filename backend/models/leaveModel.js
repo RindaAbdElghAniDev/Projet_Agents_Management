@@ -60,8 +60,10 @@ const findById = async (id) => {
 };
 
 // Chevauchement de dates pour un agent (peu importe le type : on ne peut pas être sur deux congés en même temps)
-const findOverlap = async (agentId, startDate, endDate) => {
-  const [rows] = await pool.execute(
+// NEW-02 : `conn` permet d'exécuter ce contrôle dans la transaction du contrôleur (création
+// de congé). Par défaut on utilise le pool : le comportement hors transaction est inchangé.
+const findOverlap = async (agentId, startDate, endDate, conn = pool) => {
+  const [rows] = await conn.execute(
     `SELECT id FROM leaves
      WHERE agent_id = ?
        AND status IN ('PENDING', 'APPROVED')
@@ -72,8 +74,10 @@ const findOverlap = async (agentId, startDate, endDate) => {
 };
 
 // Créer une demande, retourne son id
-const create = async ({ agent_id, leave_type, start_date, end_date, reason }) => {
-  const [result] = await pool.execute(
+// NEW-02 : `conn` permet d'exécuter cet INSERT dans la transaction du contrôleur.
+// Par défaut on utilise le pool : le comportement hors transaction est inchangé.
+const create = async ({ agent_id, leave_type, start_date, end_date, reason }, conn = pool) => {
+  const [result] = await conn.execute(
     `INSERT INTO leaves (agent_id, leave_type, start_date, end_date, reason, status)
      VALUES (?, ?, ?, ?, ?, 'PENDING')`,
     [agent_id, leave_type, start_date, end_date, reason]
@@ -82,12 +86,38 @@ const create = async ({ agent_id, leave_type, start_date, end_date, reason }) =>
 };
 
 // Traiter une demande : approuver ou rejeter
-const review = async (id, status, reviewerId) => {
-  const [result] = await pool.execute(
-    'UPDATE leaves SET status = ?, reviewed_by = ? WHERE id = ?',
+// La condition "AND status = 'PENDING'" rend l'UPDATE atomique et idempotent : si deux
+// approbations concurrentes visent la même demande, une seule renvoie affectedRows = 1,
+// l'autre renvoie 0 et le contrôleur répond 409. Sans cela, un check-then-act
+// (lecture ligne 200 du contrôleur) laisserait passer deux approbations.
+//
+// SEC-17 : la clause EXISTS exige en PLUS que la fiche agent soit encore ACTIVE au
+// moment exact de l'écriture. Approbation et vérification de statut sont donc une
+// seule opération MySQL non dissociable — un agent passé INACTIVE fait échouer l'UPDATE
+// (affectedRows = 0) et le contrôleur renvoie 409.
+//
+// `conn` permet d'exécuter cette écriture dans la transaction du contrôleur (SEC-06 étape 2).
+// Par défaut on utilise le pool : le comportement hors transaction est inchangé.
+const review = async (id, status, reviewerId, conn = pool) => {
+  const [result] = await conn.execute(
+    `UPDATE leaves
+        SET status = ?, reviewed_by = ?
+      WHERE id = ?
+        AND status = 'PENDING'
+        AND EXISTS (SELECT 1 FROM agents a WHERE a.id = leaves.agent_id AND a.status = 'ACTIVE')`,
     [status, reviewerId, id]
   );
   return result.affectedRows;
 };
 
-module.exports = { findAll, findById, findOverlap, create, review };
+// Compte les congés rattachés à un agent (SEC-10).
+// Lecture seule : sert de garde avant suppression, les FK étant en ON DELETE CASCADE.
+const countByAgent = async (id) => {
+  const [rows] = await pool.execute(
+    'SELECT COUNT(*) AS total FROM leaves WHERE agent_id = ?',
+    [id]
+  );
+  return Number(rows[0].total);
+};
+
+module.exports = { findAll, findById, findOverlap, create, review, countByAgent };

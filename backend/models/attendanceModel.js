@@ -96,4 +96,14 @@ const findAllForExport = async (filters) => {
   );
   return records;
 };
-module.exports = { findAll, findById, findByAgentAndDate,findAllForExport, create, update };
+// Compte les présences rattachées à un agent (SEC-10).
+// Lecture seule : sert de garde avant suppression, les FK étant en ON DELETE CASCADE.
+const countByAgent = async (id) => {
+  const [rows] = await pool.execute(
+    'SELECT COUNT(*) AS total FROM attendance WHERE agent_id = ?',
+    [id]
+  );
+  return Number(rows[0].total);
+};
+
+module.exports = { findAll, findById, findByAgentAndDate,findAllForExport, create, update, countByAgent };

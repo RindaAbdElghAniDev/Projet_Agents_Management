@@ -1,3 +1,4 @@
+const pool = require('../config/db');
 const Leave = require('../models/leaveModel');
 const Agent = require('../models/agentModel');
 const Log = require('../models/logModel');
@@ -73,7 +74,18 @@ const getLeaves = async (req, res, next) => {
 
     let agentId;
     if (req.user.role === 'ADMIN') {
-      agentId = parseInt(req.query.agent_id, 10) || null;
+      // Pass 2 (Stabilization) : parsing strict de agent_id — même pattern que SEC-22.
+      // Absent/vide → null (filtre omis) ; entier positif strict → ID ;
+      // 0, négatif ou non-integer (abc, 12abc) → 400 (au lieu d'un silencieux null).
+      const rawAgentId = String(req.query.agent_id ?? '').trim();
+      agentId = null;
+      if (rawAgentId !== '') {
+        const parsedAgentId = Number(rawAgentId);
+        if (!Number.isInteger(parsedAgentId) || parsedAgentId <= 0) {
+          throw createError('agent_id invalide', 400);
+        }
+        agentId = parsedAgentId;
+      }
     } else {
       const ownAgent = await getOwnAgent(req.user);
       agentId = ownAgent.id;
@@ -114,7 +126,12 @@ const getLeaveById = async (req, res, next) => {
   }
 };
 
-// POST /api/leaves (Agent) : crée une demande pour SA propre fiche
+// POST /api/leaves (Agent) : crée une demande pour SA propre fiche.
+// POLITIQUE MÉTIER SEC-18 : seuls les comptes de rôle AGENT peuvent créer une demande,
+// MÊME si un compte ADMIN est exceptionnellement lié à une fiche agents (liens créés par
+// linkUserByEmail sans contrôle de rôle). Le refus est délibéré : un ADMIN valideur ne
+// doit pas pouvoir saisir lui-même sa propre demande. Placé AVANT getOwnAgent, aucun
+// accès à la fiche ni aucune écriture n'a lieu pour un compte non-AGENT.
 const createLeave = async (req, res, next) => {
   try {
     if (req.user.role !== 'AGENT') {
@@ -158,17 +175,69 @@ const createLeave = async (req, res, next) => {
       }
     }
 
-    if (await Leave.findOverlap(ownAgent.id, startDate, endDate)) {
-      throw createError('Une demande en attente ou approuvée existe déjà sur cette période', 409);
+    // NEW-02 : contrôle d'overlap + INSERT sont exécutés dans UNE SEULE transaction (pattern
+    // identique à reviewLeave). Point critique : le verrou FOR UPDATE de la fiche agents DOIT
+    // être acquis AVANT le premier findOverlap() de la transaction — il sérialise les créations
+    // concurrentes du même agent ; sous MySQL REPEATABLE-READ le read view de la lecture
+    // d'overlap se crée alors après le commit du concurrent (sinon le TOCTOU réapparaîtrait).
+    let connection;
+    let id;
+    try {
+      connection = await pool.getConnection();
+      await connection.beginTransaction();
+
+      // 1. Verrou ligne agent : deux créations simultanées de cet agent s'exécutent l'une après l'autre.
+      const lockedAgent = await Agent.findByIdForUpdate(ownAgent.id, connection);
+      if (!lockedAgent) {
+        throw createError('La fiche agent est introuvable', 403);
+      }
+
+      // 2. Recontrôle du solde sur la ligne verrouillée (congé PAYÉ).
+      if (leaveType === 'PAID') {
+        const requestedDays = countLeaveDays(startDate, endDate);
+        if (requestedDays > lockedAgent.annual_leave_balance) {
+          throw createError(
+            `Solde insuffisant : il vous reste ${lockedAgent.annual_leave_balance} jour(s), cette demande en compte ${requestedDays} jour(s)`,
+            400
+          );
+        }
+      }
+
+      // 3. Contrôle d'overlap sur la MÊME connexion transactionnelle (après le verrou).
+      if (await Leave.findOverlap(ownAgent.id, startDate, endDate, connection)) {
+        throw createError('Une demande en attente ou approuvée existe déjà sur cette période', 409);
+      }
+
+      // 4. INSERT atomique avec le contrôle.
+      id = await Leave.create({
+        agent_id: ownAgent.id,
+        leave_type: leaveType,
+        start_date: startDate,
+        end_date: endDate,
+        reason,
+      }, connection);
+
+      await connection.commit();
+      connection.release();
+      connection = null;
+    } catch (error) {
+      // Annulation : aucune écriture partielle ne doit subsister.
+      if (connection) {
+        try {
+          await connection.rollback();
+        } catch (rollbackError) {
+          process.stdout.write('Rollback impossible : ' + rollbackError.message + '\n');
+        }
+      }
+      next(error);
+      return;
+    } finally {
+      // Libère la connexion du pool dans tous les cas (succès, 409, erreur SQL inattendue).
+      if (connection) {
+        connection.release();
+      }
     }
 
-    const id = await Leave.create({
-      agent_id: ownAgent.id,
-      leave_type: leaveType,
-      start_date: startDate,
-      end_date: endDate,
-      reason,
-    });
     const leave = await Leave.findById(id);
 
     await Log.create(
@@ -188,7 +257,12 @@ const createLeave = async (req, res, next) => {
 };
 
 // PUT /api/leaves/:id (Admin) : approuver ou rejeter
+// SEC-06 étape 2 : le débit du solde et le changement de statut sont exécutés dans UNE SEULE
+// transaction MySQL (même connexion dédiée). Ainsi il est impossible d'obtenir un solde
+// débité alors que la demande reste PENDING, ni l'inverse. En cas d'échec : ROLLBACK.
 const reviewLeave = async (req, res, next) => {
+  // Connexion réservée à cette transaction : libérée quoi qu'il arrive (voir le finally).
+  let connection;
   try {
     const id = parseId(req.params.id);
 
@@ -205,20 +279,66 @@ const reviewLeave = async (req, res, next) => {
       throw createError('Cette demande a déjà été traitée', 409);
     }
 
-    // Un congé PAYÉ décompte le solde annuel de l'agent, uniquement au moment de l'approbation
-    if (status === 'APPROVED' && leave.leave_type === 'PAID') {
-      const agent = await Agent.findById(leave.agent_id);
-      const days = countLeaveDays(leave.start_date, leave.end_date);
-      if (days > agent.annual_leave_balance) {
-        throw createError(
-          `Solde insuffisant pour approuver cette demande (${agent.annual_leave_balance} jour(s) restant(s), demande de ${days} jour(s))`,
-          409
-        );
-      }
-      await Agent.adjustBalance(leave.agent_id, -days);
+    // SEC-17 : congé PAYÉ → le solde n'est contrôlé (et débité) qu'à l'approbation.
+    const isPaidApproval = status === 'APPROVED' && leave.leave_type === 'PAID';
+    const days = countLeaveDays(leave.start_date, leave.end_date);
+
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    // SEC-17 : contrôle métier AVANT tout débit, sur une lecture verrouillée (FOR UPDATE)
+    // de la fiche agent dans la transaction. Le verrou ligne sérialise cette review avec
+    // toute écriture simultanée de statut agent : impossible d'intercaler un passage à
+    // INACTIVE entre la lecture du statut et le commit (fermeture du TOCTOU).
+    const agent = await Agent.findByIdForUpdate(leave.agent_id, connection);
+    if (!agent) {
+      throw createError('Impossible de traiter le congé : fiche agent introuvable.', 409);
+    }
+    if (agent.status !== 'ACTIVE') {
+      throw createError('Impossible de traiter le congé : cet agent est inactif.', 409);
     }
 
-    await Leave.review(id, status, req.user.id);
+    // Défense applicative (lecture) : donne un message d'erreur précis à l'utilisateur.
+    // Défense SQL (l'agentModel) reste seule valable face à une concurrence : c'est
+    // l'UPDATE conditionnel qui arbitre réellement en cas d'approbations simultanées.
+    if (isPaidApproval && days > agent.annual_leave_balance) {
+      throw createError(
+        `Solde insuffisant pour approuver cette demande (${agent.annual_leave_balance} jour(s) restant(s), demande de ${days} jour(s))`,
+        409
+      );
+    }
+
+    // 1er écrit : débit du solde (seulement si PAID approuvé)
+    if (isPaidApproval) {
+      const adjusted = await Agent.adjustBalance(leave.agent_id, -days, connection);
+      // 0 ligne affectée = la garde SQL a rejeté le débit (solde insuffisant à l'instant
+      // de l'écriture, par exemple à cause d'une approbation concurrente).
+      if (adjusted === 0) {
+        throw createError('Solde insuffisant pour approuver cette demande', 409);
+      }
+    }
+
+    // 2e écrit : passage PENDING -> APPROVED/REJECTED
+    const reviewed = await Leave.review(id, status, req.user.id, connection);
+    // 0 ligne affectée = la demande n'était plus PENDING au moment de l'écriture
+    // (traitée entre-temps), ou la garde EXISTS (agent toujours ACTIVE) de Leave.review
+    // a rejeté l'UPDATE (SEC-17).
+    if (reviewed === 0) {
+      const currentAgent = await Agent.findByIdForUpdate(leave.agent_id, connection);
+      if (!currentAgent) {
+        throw createError('Impossible de traiter le congé : fiche agent introuvable.', 409);
+      }
+      if (currentAgent.status !== 'ACTIVE') {
+        throw createError('Impossible de traiter le congé : cet agent est inactif.', 409);
+      }
+      throw createError('Cette demande a déjà été traitée', 409);
+    }
+
+    await connection.commit();
+    connection.release();
+    connection = null;
+
+    // Relecture et journalisation APRÈS commit : l'audit n'appartient pas à la transaction.
     const updated = await Leave.findById(id);
 
     await Log.create(
@@ -233,7 +353,20 @@ const reviewLeave = async (req, res, next) => {
       leave: updated,
     });
   } catch (error) {
+    // Annulation : aucune écriture partielle ne doit subsister.
+    if (connection) {
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        process.stdout.write('Rollback impossible : ' + rollbackError.message + '\n');
+      }
+    }
     next(error);
+  } finally {
+    // Libère la connexion du pool dans tous les cas (succès, 409, erreur SQL inattendue).
+    if (connection) {
+      connection.release();
+    }
   }
 };
 

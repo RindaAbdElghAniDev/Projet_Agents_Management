@@ -14,6 +14,7 @@ import Attendance from './pages/Attendance';
 import Leaves from './pages/Leaves';
 import Logs from './pages/Logs';
 import Profile from './pages/Profile';
+import CompleteAgentProfile from './pages/CompleteAgentProfile';
 
 function App() {
   return (
@@ -28,6 +29,7 @@ function App() {
           <Route path="/attendance" element={<Attendance />} />
           <Route path="/leaves" element={<Leaves />} />
           <Route path="/profile" element={<Profile />} />
+          <Route path="/complete-agent-profile" element={<CompleteAgentProfile />} />
 
           <Route element={<AdminRoute />}>
             <Route path="/agents" element={<Agents />} />

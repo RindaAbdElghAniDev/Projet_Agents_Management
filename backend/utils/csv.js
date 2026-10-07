@@ -1,6 +1,10 @@
 // Transforme une valeur en un champ CSV sûr (gère guillemets, virgules, retours à la ligne)
 const escapeField = (value) => {
-  const str = value === null || value === undefined ? '' : String(value);
+  let str = value === null || value === undefined ? '' : String(value);
+  // NEW-01 (CWE-1236) : neutralise la CSV/Formula Injection — toute valeur
+  // commençant par un marqueur de formule de tableur (=, +, -, @, tab, CR)
+  // est préfixée d'une apostrophe (marqueur "cellule texte" Excel/Calc).
+  if (/^[=+\-@\t\r]/.test(str)) str = `'${str}`;
   if (/[",\n;]/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`;
   }

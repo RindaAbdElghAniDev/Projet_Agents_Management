@@ -1,7 +1,7 @@
 const Log = require('../models/logModel');
 
 const ACTIONS = [
-  'LOGIN', 'LOGOUT',
+  'LOGIN', 'LOGOUT', 'REGISTER',
   'CREATE_AGENT', 'UPDATE_AGENT', 'DELETE_AGENT',
   'CREATE_DEPARTMENT', 'UPDATE_DEPARTMENT', 'DELETE_DEPARTMENT',
   'CREATE_LEAVE', 'APPROVE_LEAVE', 'REJECT_LEAVE',
@@ -26,7 +26,17 @@ const getLogs = async (req, res, next) => {
     if (action && !ACTIONS.includes(action)) {
       throw createError('Action invalide', 400);
     }
-    const userId = parseInt(req.query.user_id, 10) || null;
+    // Pass 2 (Stabilization) : parsing strict de user_id — même pattern que SEC-22.
+    // Absent/vide → null ; entier positif strict → ID ; 0, négatif ou non-integer → 400.
+    const rawUserId = String(req.query.user_id ?? '').trim();
+    let userId = null;
+    if (rawUserId !== '') {
+      const parsedUserId = Number(rawUserId);
+      if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
+        throw createError('user_id invalide', 400);
+      }
+      userId = parsedUserId;
+    }
 
     const { records, total } = await Log.findAll({ action, userId }, limit, offset);
 
@@ -40,4 +50,4 @@ const getLogs = async (req, res, next) => {
   }
 };
 
-module.exports = { getLogs, ACTIONS };
+module.exports = { getLogs };

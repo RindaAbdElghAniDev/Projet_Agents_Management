@@ -1,6 +1,25 @@
 import { z } from 'zod';
 import { getToday } from './date';
 
+// SEC-19 : miroir de cleanAgentData (backend) — règles partagées de dates agent.
+// hire_date ne peut pas être future, ni antérieure à birth_date quand celle-ci existe.
+const hireDateCheck = (data, ctx) => {
+  if (data.hire_date > getToday()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['hire_date'],
+      message: "La date d'embauche ne peut pas être dans le futur",
+    });
+  }
+  if (data.birth_date && data.hire_date < data.birth_date) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['hire_date'],
+      message: "La date d'embauche ne peut pas être antérieure à la date de naissance",
+    });
+  }
+};
+
 export const loginSchema = z.object({
   email: z.string().trim().min(1, "L'email est obligatoire").email("Format d'email invalide"),
   password: z.string().min(1, 'Le mot de passe est obligatoire'),
@@ -36,7 +55,33 @@ export const agentSchema = z.object({
     .number({ invalid_type_error: 'Le solde doit être un nombre' })
     .min(0, 'Le solde doit être positif')
     .max(365, '365 jours maximum'),
-});
+})
+  .refine((data) => !data.birth_date || data.birth_date <= getToday(), {
+    message: 'La date de naissance ne peut pas être dans le futur',
+    path: ['birth_date'],
+  })
+  .superRefine(hireDateCheck);
+
+export const myAgentProfileSchema = z
+  .object({
+    first_name: z.string().trim().min(1, 'Le prénom est obligatoire').max(100, '100 caractères maximum'),
+    last_name: z.string().trim().min(1, 'Le nom est obligatoire').max(100, '100 caractères maximum'),
+    email: z.string().trim().min(1, "L'email est obligatoire").email("Format d'email invalide"),
+    phone: z.string().trim().max(30, '30 caractères maximum').optional().or(z.literal('')),
+    address: z.string().trim().max(255, '255 caractères maximum').optional().or(z.literal('')),
+    birth_date: z.string().optional().or(z.literal('')),
+    hire_date: z.string().min(1, "La date d'embauche est obligatoire"),
+    department_id: z.string().min(1, 'Le département est obligatoire'),
+    position: z.string().trim().min(1, 'Le poste est obligatoire').max(100, '100 caractères maximum'),
+  })
+  // Miroir de cleanAgentData (backend) : une date de naissance ne peut pas être future.
+  .refine((data) => !data.birth_date || data.birth_date <= getToday(), {
+    message: 'La date de naissance ne peut pas être dans le futur',
+    path: ['birth_date'],
+  })
+  // SEC-19 : même cohérence de dates que la création par un ADMIN.
+  .superRefine(hireDateCheck);
+
 export const departmentSchema = z.object({
   name: z.string().trim().min(1, 'Le nom est obligatoire').max(100, '100 caractères maximum'),
   description: z.string().trim().max(255, '255 caractères maximum').optional(),

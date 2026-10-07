@@ -93,9 +93,18 @@ const getAttendance = async (req, res, next) => {
     }
 
     // Qui peut voir quoi ?
-    let agentId;
+    let agentId = null;
     if (req.user.role === 'ADMIN') {
-      agentId = parseInt(req.query.agent_id, 10) || null; // filtre optionnel
+      // SEC-22 : validation stricte — une valeur invalide doit être rejetée (400),
+      // jamais convertie en null, ce qui supprimerait silencieusement le filtre SQL.
+      const rawAgentId = String(req.query.agent_id ?? '').trim();
+      if (rawAgentId !== '') {
+        const parsed = Number(rawAgentId);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+          throw createError('agent_id invalide', 400);
+        }
+        agentId = parsed;
+      }
     } else {
       // Un AGENT ne voit que SES présences, quoi qu'il envoie dans l'URL
       const ownAgent = await getOwnAgent(req.user);
@@ -252,7 +261,16 @@ const exportAttendance = async (req, res, next) => {
       throw createError('Date de filtre invalide (AAAA-MM-JJ)', 400);
     }
 
-    const agentId = parseInt(req.query.agent_id, 10) || null;
+    // SEC-22 : validation stricte — idem getAttendance (pas de fallback silencieux vers null).
+    const rawAgentId = String(req.query.agent_id ?? '').trim();
+    let agentId = null;
+    if (rawAgentId !== '') {
+      const parsed = Number(rawAgentId);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw createError('agent_id invalide', 400);
+      }
+      agentId = parsed;
+    }
 
     const records = await Attendance.findAllForExport({ agentId, status, dateFrom, dateTo });
 

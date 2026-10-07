@@ -344,8 +344,8 @@ const Agents = () => {
           <Input label="Email" type="email" error={errors.email?.message} {...register('email')} />
           <Input label="Téléphone" error={errors.phone?.message} {...register('phone')} />
           <Input label="Adresse" className="sm:col-span-2" error={errors.address?.message} {...register('address')} />
-          <Input label="Date de naissance" type="date" error={errors.birth_date?.message} {...register('birth_date')} />
-          <Input label="Date d'embauche" type="date" error={errors.hire_date?.message} {...register('hire_date')} />
+          <Input label="Date de naissance" type="date" max={getToday()} error={errors.birth_date?.message} {...register('birth_date')} />
+          <Input label="Date d'embauche" type="date" max={getToday()} error={errors.hire_date?.message} {...register('hire_date')} />
           <Select label="Département" error={errors.department_id?.message} {...register('department_id')}>
             <option value="">Choisir...</option>
             {departments.map((d) => (

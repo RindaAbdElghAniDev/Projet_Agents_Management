@@ -1,10 +1,25 @@
 require('dotenv').config();
 
+// Garde-fou : refuse de démarrer avec un JWT_SECRET absent, trop court ou manifestement
+// faible. Un secret faible permettrait de forger un jeton ADMIN valide et donc de contourner
+// entièrement l'authentification. On échoue au démarrage plutôt que de servir en insecurity.
+const weak = ['secret', 'changeme', 'remplacez', 'votre-secret', 'example'];
+
+if (!process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET est obligatoire.');
+}
+
+if (process.env.JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET : 32 caractères minimum.');
+}
+
+if (weak.some((w) => process.env.JWT_SECRET.toLowerCase().includes(w))) {
+  throw new Error('JWT_SECRET semble être une valeur d’exemple.');
+}
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-
-const pool = require('./config/db');
 
 const authRoutes = require('./routes/authRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');

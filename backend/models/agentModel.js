@@ -71,6 +71,16 @@ const findById = async (id) => {
   return rows[0];
 };
 
+// SEC-17 : lecture verrouillée (SELECT ... FOR UPDATE) à utiliser DANS une transaction.
+// Le verrou posé sur la ligne agent sérialise la review d'un congé avec toute écriture
+// simultanée du statut agent : impossible d'intercaler un passage à INACTIVE entre la
+// lecture du statut et le commit de la review (fermeture du TOCTOU). Comportement
+// identique à findById pour les colonnes retournées.
+const findByIdForUpdate = async (id, conn = pool) => {
+  const [rows] = await conn.execute('SELECT * FROM agents WHERE id = ? FOR UPDATE', [id]);
+  return rows[0];
+};
+
 const findByEmail = async (email) => {
   const [rows] = await pool.execute('SELECT id FROM agents WHERE email = ?', [email]);
   return rows[0];
@@ -149,24 +159,45 @@ const linkUserByEmail = async (userId, email) => {
 };
 
 // Ajuste le solde de congés d'un agent (delta négatif pour décompter, positif pour créditer)
-const adjustBalance = async (id, delta) => {
-  await pool.execute(
-    'UPDATE agents SET annual_leave_balance = annual_leave_balance + ? WHERE id = ?',
-    [delta, id]
+// La garde "AND annual_leave_balance + ? >= 0" empêche le solde de devenir négatif même en
+// cas d'approbations concurrentes : l'UPDATE est évalué et appliqué par MySQL en une seule
+// opération atomique. Le delta est donc passé deux fois (une fois dans le SET, une fois dans
+// la condition). Retourne affectedRows : 0 signifie que le solde était insuffisant.
+// conn permet d'executer cette ecriture dans la transaction du controleur (SEC-06 etape 2).
+// Par defaut on utilise le pool : le comportement hors transaction est inchange.
+const adjustBalance = async (id, delta, conn = pool) => {
+  const [result] = await conn.execute(
+    'UPDATE agents SET annual_leave_balance = annual_leave_balance + ? WHERE id = ? AND annual_leave_balance + ? >= 0',
+    [delta, id, delta]
   );
+  return result.affectedRows;
 };
 
 // Liste complète (sans pagination), pour l'export CSV. Plafonnée à 5000 lignes par sécurité.
+// SEC-14 : projection minimale pour l'export CSV. Ni salary, ni address,
+// ni birth_date, ni user_id.
+const SELECT_AGENTS_EXPORT = `
+  SELECT a.id, a.first_name, a.last_name, a.email, a.phone, a.department_id,
+         a.position, a.status, a.hire_date, a.annual_leave_balance,
+         d.name AS department_name
+  FROM agents a
+  JOIN departments d ON a.department_id = d.id
+`;
+
 const findAllForExport = async (filters) => {
   const { where, params } = buildWhere(filters);
   const orderBy = buildOrderBy('name', 'asc');
-  const [agents] = await pool.query(`${SELECT_AGENTS} ${where} ${orderBy} LIMIT 5000`, params);
+  const [agents] = await pool.query(
+    `${SELECT_AGENTS_EXPORT} ${where} ${orderBy} LIMIT 5000`,
+    params
+  );
   return agents;
 };
 
 module.exports = {
   findAll,
   findById,
+  findByIdForUpdate,
   findByEmail,
   findByUserId,
   create,

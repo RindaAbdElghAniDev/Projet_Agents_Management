@@ -1,5 +1,5 @@
 const notFound = (req, res) => {
-  res.status(404).json({ message: `Route introuvable : ${req.method} ${req.originalUrl}` });
+  res.status(404).json({ message: 'Route introuvable.' });
 };
 
 const errorHandler = (err, req, res, next) => {
